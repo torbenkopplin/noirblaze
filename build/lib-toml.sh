@@ -129,6 +129,28 @@ solve_surface() {
 # byteof <#rrggbb> -- the red channel, which for a grey is the byte.
 byteof() { awk -v h="$1" "$AWK_LIB"'BEGIN { print hex2(substr(h, 2, 2)) }'; }
 
+# surface_of <bg field> -- normalise a groups.tsv background into a surface.
+#
+# "-" and "none" are the default background. So is any role whose colour EQUALS
+# the palette's own `bg`: kitty makes a cell translucent when its background
+# matches the default terminal background, and a cell nvim paints #121212 on a
+# terminal whose background is #121212 is exactly that cell. It composites, so
+# its surface is T and not byte 18.
+#
+# Getting this wrong is not academic. LineNr is `bg = c.bg`, and solved against
+# an opaque #121212 it came out #616161 -- which is 3.0:1 there and 2.5:1 once
+# nvimrc/init.lua sets `bg = "none"` on it, which it does on the line after
+# loading the colourscheme.
+surface_of() {
+    case $1 in
+        -|none) printf 'default'; return ;;
+    esac
+    local c bgc
+    c=$(printf '%s\n' "$RAMP" | awk -F'\t' -v r="$1" '$1==r{print $2;exit}')
+    bgc=$(printf '%s\n' "$RAMP" | awk -F'\t' '$1=="bg"{print $2;exit}')
+    [[ ${c,,} == "${bgc,,}" ]] && printf 'default' || printf '%s' "$1"
+}
+
 # surfaces -- every background role in groups.tsv that carries a solvable
 # foreground, plus "default" for the composited one. Discovered rather than
 # listed, so a new panel colour cannot be missed.

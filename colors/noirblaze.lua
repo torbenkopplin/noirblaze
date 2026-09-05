@@ -60,10 +60,6 @@ P.a_pink = {
   bg             = "#121212",
   fg0            = "#f5f5f5",
 }
-P.k_bg = {
-  bg3            = "#616161",
-  dim4           = "#7a7a7a",
-}
 P.k_bg3 = {
   mid            = "#949494",
 }
@@ -78,10 +74,6 @@ P.k = {
 P.b_bg = {
   dim3           = "#7d7d7d",
   white          = "#ffffff",
-}
-P.t_bg = {
-  fg1            = "#d5d5d5",
-  fg2            = "#b4b4b4",
 }
 P.t_bg2 = {
   dim2           = "#888888",
@@ -137,18 +129,16 @@ local a_bg2    = P.a_bg2
 local a_bg3    = P.a_bg3
 local a        = P.a
 local a_pink   = P.a_pink
-local k_bg     = P.k_bg
 local k_bg3    = P.k_bg3
 local k        = P.k
 local b_bg     = P.b_bg
-local t_bg     = P.t_bg
 local t_bg2    = P.t_bg2
 local t_bg3    = P.t_bg3
 local t        = P.t
 local t_dim1   = P.t_dim1
 
-hi("Normal", { fg = t_bg.fg2, bg = c.bg })
-hi("NormalNC", { fg = t_bg.fg2, bg = c.bg })
+hi("Normal", { fg = t.fg2, bg = c.bg })
+hi("NormalNC", { fg = t.fg2, bg = c.bg })
 hi("Comment", { fg = t.dim1, italic = true })
 hi("Constant", { fg = a.pink })
 hi("String", { fg = t.dim3 })
@@ -182,7 +172,7 @@ hi("ColorColumn", { bg = c.bg3 })
 hi("CursorLine", { bg = c.bg2 })
 hi("CursorColumn", { bg = c.bg2 })
 hi("CursorLineNr", { fg = t_bg3.dim2, bg = c.bg3 })
-hi("LineNr", { fg = k_bg.bg3, bg = c.bg })
+hi("LineNr", { fg = k.bg3, bg = c.bg })
 hi("SignColumn", { bg = c.bg })
 hi("FoldColumn", { fg = k_bg3.mid, bg = c.bg3 })
 hi("Folded", { fg = t_bg3.mid, bg = c.bg3 })
@@ -192,7 +182,7 @@ hi("StatusLine", { fg = t_bg3.mid, bg = c.bg3 })
 hi("StatusLineNC", { fg = t_bg3.dim1, bg = c.bg3 })
 hi("TabLine", { fg = t_bg3.fg2, bg = c.bg3 })
 hi("TabLineFill", { bg = c.bg3 })
-hi("TabLineSel", { fg = t_bg.fg1, bg = c.bg })
+hi("TabLineSel", { fg = t.fg1, bg = c.bg })
 hi("Visual", { bg = c.bg3 })
 hi("VisualNOS", { fg = a_bg3.pink, bg = c.bg3 })
 hi("Search", { fg = c.bg, bg = b_bg.white })
@@ -201,7 +191,7 @@ hi("CurSearch", { fg = a_pink.bg, bg = c.pink })
 hi("MatchParen", { bg = c.dim1, bold = true })
 hi("Conceal", { fg = k.dim1 })
 hi("NonText", { fg = k.bg3 })
-hi("SpecialKey", { fg = k_bg.dim4, bg = c.bg })
+hi("SpecialKey", { fg = k.dim4, bg = c.bg })
 hi("Directory", { fg = t.fg3 })
 hi("Question", { fg = t_bg3.fg0, bg = c.bg3 })
 hi("MoreMsg", { fg = c.bg, bg = b_bg.dim3 })

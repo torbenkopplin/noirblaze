@@ -127,7 +127,7 @@ hex() {
 # MoreMsg is the one that needs it: #121212 on dim3 is 4.24:1, and the fix is
 # dim3 -> #7c7c7c, four bytes.
 pairs_used() {
-    awk -F'\t' '
+    awk -F'\t' -v bgrole="$(default_bg_roles)" '
         /^#/ || NF < 6 { next }
         {
             cls = $5
@@ -136,11 +136,15 @@ pairs_used() {
                 if ($2 != "-" && $3 != "-" && $3 != "none") print "inverse\t" $2 "\t" $3
                 next
             }
-            surf = ($3 == "-" || $3 == "none") ? "default" : $3
+            surf = ($3 == "-" || $3 == "none" || $3 == bgrole) ? "default" : $3
             if ($2 != "-") print cls "\t" surf "\t" $2
             if ($4 != "-") print cls "\t" surf "\t" $4
         }' "$GROUPS_TSV" | sort -u
 }
+
+# default_bg_roles -- the role name whose colour IS the default background.
+# Any group painted in it composites; see surface_of in build/lib-toml.sh.
+default_bg_roles() { printf 'bg'; }
 
 # tbl_name <class> <surface>
 tbl_name() {
@@ -250,7 +254,7 @@ LUA
     printf '\n'
 
     # The highlight groups, straight out of groups.tsv.
-    awk -F'\t' '
+    awk -F'\t' -v bgrole="$(default_bg_roles)" '
         /^#/ || NF < 6 { next }
         {
             group = $1; fg = $2; bg = $3; sp = $4; cls = $5; attrs = $6
@@ -261,7 +265,7 @@ LUA
             else if (cls == "inverse") tbl = "c"   # the foreground; see bgtbl
             else {
                 base = (cls == "text") ? "t" : (cls == "chrome") ? "k" : "a"
-                tbl = (bg == "-" || bg == "none") ? base : base "_" bg
+                tbl = (bg == "-" || bg == "none" || bg == bgrole) ? base : base "_" bg
             }
             n = 0; out = ""
             if (fg != "-") { out = out sprintf("fg = %s.%s", tbl, fg); n++ }

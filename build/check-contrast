@@ -122,7 +122,7 @@ run_profile() {
         [[ $mark == - ]] && mark=$sp
         # A row with no foreground and no undercurl colour inherits Normal's.
         [[ $mark == - ]] && mark=fg2
-        surf=default; [[ $bg != - && $bg != none ]] && surf=$bg
+        surf=$(surface_of "$bg")
         bghex=$(surface_hex "$surf" "$T")
         if [[ $cls == fixed ]]; then
             fghex=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$mark" '$1==r && $2=="fixed"{print $3;exit}')
