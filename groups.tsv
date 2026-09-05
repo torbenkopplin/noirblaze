@@ -1,0 +1,195 @@
+# groups.tsv -- every highlight group, and which palette role and contrast
+# class it belongs to. No colour appears here: only role names from
+# palette.toml, which is the only file a colour is typed in.
+#
+# Format:  group <TAB> fg <TAB> bg <TAB> sp <TAB> class <TAB> attrs
+#
+#   fg/bg/sp   a role name from [ramp] / [ramp_extra] in palette.toml, or
+#              "-" for unset, or "none" for an explicitly transparent
+#              background (the default background, which is the one kitty
+#              makes translucent -- see below)
+#   class      text | chrome | accent | inverse | fixed. See palette.toml.
+#              inverse = dark text on an explicit light background, so the
+#              solve moves the BACKGROUND rather than the foreground.
+#              A row with no fg but a bg inherits Normal's foreground, and
+#              build/check-contrast checks it as fg2 against that background.
+#   attrs      bold, italic, underline, undercurl -- comma separated, or "-"
+#
+# Why "bg" matters to the solve
+# -----------------------------
+# kitty makes a cell translucent only when its background is the DEFAULT
+# background -- verified in kitty 0.48.2's own option documentation: "it only
+# sets the background color's opacity in cells that have the same background
+# color as the default terminal background". So a group with an explicit bg is
+# drawn opaque and is solved against that colour; a group with no bg (or
+# bg = none) is solved against T, the composited background.
+#
+# nvimrc/init.lua clears the background of twenty groups immediately after
+# loading the colourscheme, which is what puts Normal, LineNr, StatusLine and
+# the rest into the composited case. The theme is solved to be correct either
+# way, so that block neither needs changing nor breaks anything.
+Normal	fg2	bg	-	text	-
+NormalNC	fg2	bg	-	text	-
+Comment	dim1	-	-	text	italic
+Constant	pink	-	-	accent	-
+String	dim3	-	-	text	-
+Character	dim3	-	-	text	-
+Number	pink	-	-	accent	-
+Boolean	pink	-	-	accent	-
+Float	pink	-	-	accent	-
+Identifier	white	-	-	text	-
+Function	pink	-	-	accent	-
+Statement	fg3	-	-	text	-
+Keyword	mid	-	-	text	-
+Conditional	mid	-	-	text	-
+Repeat	mid	-	-	text	-
+Label	mid	-	-	text	-
+Operator	fg3	-	-	text	-
+Exception	pink	-	-	accent	-
+PreProc	pink	-	-	accent	-
+Include	dim2	-	-	text	-
+Define	pink	-	-	accent	-
+Macro	pink	-	-	accent	-
+Type	dim4	-	-	text	-
+StorageClass	dim2	-	-	text	-
+Structure	dim2	-	-	text	-
+Typedef	dim2	-	-	text	-
+Special	dim3	-	-	text	-
+Underlined	fg3	-	-	text	underline
+Error	pink	bg3	-	accent	-
+Todo	pink	bg3	-	accent	bold
+Title	fg3	-	-	text	bold
+ColorColumn	-	bg3	-	fixed	-
+CursorLine	-	bg2	-	fixed	-
+CursorColumn	-	bg2	-	fixed	-
+CursorLineNr	dim2	bg3	-	text	-
+LineNr	bg3	bg	-	chrome	-
+SignColumn	-	bg	-	fixed	-
+FoldColumn	mid	bg3	-	chrome	-
+Folded	mid	bg3	-	text	-
+VertSplit	dim1	none	-	chrome	-
+WinSeparator	dim1	none	-	chrome	-
+StatusLine	mid	bg3	-	text	-
+StatusLineNC	dim1	bg3	-	text	-
+TabLine	fg2	bg3	-	text	-
+TabLineFill	-	bg3	-	fixed	-
+TabLineSel	fg1	bg	-	text	-
+Visual	-	bg3	-	fixed	-
+VisualNOS	pink	bg3	-	accent	-
+Search	bg	white	-	inverse	-
+IncSearch	bg	white	-	inverse	-
+CurSearch	bg	pink	-	accent	-
+MatchParen	-	dim1	-	fixed	bold
+Conceal	dim1	-	-	chrome	-
+NonText	bg3	-	-	chrome	-
+SpecialKey	dim4	bg	-	chrome	-
+Directory	fg3	-	-	text	-
+Question	fg0	bg3	-	text	-
+MoreMsg	bg	dim3	-	inverse	-
+WarningMsg	pink	-	-	accent	-
+ErrorMsg	fg0	pink	-	accent	-
+WildMenu	dim3	bg3	-	text	-
+Pmenu	fg1	bg3	-	text	-
+PmenuSel	white	dim1	-	text	bold
+PmenuSbar	-	bg3	-	fixed	-
+PmenuThumb	-	dim2	-	fixed	-
+DiffAdd	pink	bg3	-	accent	-
+DiffChange	white	bg3	-	text	-
+DiffDelete	pink	bg3	-	accent	-
+DiffText	white	dim1	-	text	-
+DiagnosticError	pink	-	-	accent	-
+DiagnosticWarn	mid	-	-	text	-
+DiagnosticInfo	dim4	-	-	text	-
+DiagnosticHint	dim2	-	-	text	-
+DiagnosticUnderlineError	-	-	pink	chrome	undercurl
+DiagnosticUnderlineWarn	-	-	mid	chrome	undercurl
+DiagnosticUnderlineInfo	-	-	dim4	chrome	undercurl
+DiagnosticUnderlineHint	-	-	dim2	chrome	undercurl
+DiagnosticVirtualTextError	pink	bg2	-	accent	-
+DiagnosticVirtualTextWarn	mid	bg2	-	text	-
+DiagnosticVirtualTextInfo	dim4	bg2	-	text	-
+DiagnosticVirtualTextHint	dim2	bg2	-	text	-
+DiagnosticUnnecessary	-	-	-	fixed	-
+SpellBad	pink	-	pink	accent	undercurl
+SpellCap	white	-	white	text	undercurl
+SpellLocal	dim3	-	-	text	-
+SpellRare	pink	-	-	accent	-
+@variable	fg1	-	-	text	-
+@variable.builtin	white	-	-	text	-
+@variable.parameter	pink	-	-	accent	-
+@variable.member	fg1	-	-	text	-
+@constant	pink	-	-	accent	-
+@constant.builtin	pink	-	-	accent	-
+@string	dim3	-	-	text	-
+@string.escape	pink	-	-	accent	-
+@character	dim3	-	-	text	-
+@number	pink	-	-	accent	-
+@boolean	pink	-	-	accent	-
+@float	pink	-	-	accent	-
+@function	white	-	-	text	-
+@function.builtin	pink	-	-	accent	-
+@function.method	fg0	-	-	text	-
+@function.call	white	-	-	text	-
+@constructor	fg0	-	-	text	-
+@keyword	mid	-	-	text	-
+@keyword.function	mid	-	-	text	-
+@keyword.return	white	-	-	text	-
+@keyword.operator	fg3	-	-	text	-
+@operator	fg3	-	-	text	-
+@punctuation.delimiter	dim2	-	-	text	-
+@punctuation.bracket	dim2	-	-	text	-
+@punctuation.special	pink	-	-	accent	-
+@type	dim4	-	-	text	-
+@type.builtin	dim2	-	-	text	-
+@property	fg1	-	-	text	-
+@attribute	fg4	-	-	text	-
+@namespace	dim2	-	-	text	-
+@include	dim2	-	-	text	-
+@tag	pink	-	-	accent	-
+@tag.attribute	dim2	-	-	text	-
+@tag.delimiter	dim1	-	-	chrome	-
+@attribute.name	fg0	-	-	text	-
+@attribute.value	dim3	-	-	text	italic
+xmlTag	dim1	-	-	chrome	-
+xmlEndTag	dim1	-	-	chrome	-
+xmlNamespace	dim4	-	-	text	italic
+xmlTagName	pink	-	-	accent	-
+xmlAttrib	fg0	-	-	text	-
+xmlAttribPunct	dim2	-	-	chrome	-
+xmlString	dim3	-	-	text	italic
+htmlTag	dim1	-	-	chrome	-
+htmlEndTag	dim1	-	-	chrome	-
+htmlTagName	pink	-	-	accent	-
+htmlArg	fg0	-	-	text	-
+htmlString	dim3	-	-	text	italic
+@comment	dim1	-	-	text	italic
+@lsp.type.parameter	pink	-	-	accent	-
+@lsp.type.variable	fg1	-	-	text	-
+@lsp.type.property	fg1	-	-	text	-
+@lsp.type.function	white	-	-	text	-
+@lsp.type.method	fg0	-	-	text	-
+@lsp.type.keyword	mid	-	-	text	-
+@lsp.type.type	dim4	-	-	text	-
+@lsp.type.class	fg0	-	-	text	-
+@lsp.type.interface	dim4	-	-	text	-
+@lsp.type.namespace	dim2	-	-	text	-
+@lsp.type.enum	dim4	-	-	text	-
+@lsp.type.enumMember	fg1	-	-	text	-
+@lsp.type.macro	pink	-	-	accent	-
+@lsp.type.decorator	fg4	-	-	text	-
+@lsp.typemod.variable.unused	-	-	-	fixed	-
+@lsp.typemod.parameter.unused	-	-	-	fixed	-
+GitGutterAdd	pink	-	-	accent	-
+GitGutterChange	white	-	-	text	-
+GitGutterChangeDelete	white	-	-	text	-
+GitGutterDelete	pink	-	-	accent	-
+gitcommitComment	dim2	-	-	text	-
+gitcommitOnBranch	dim2	-	-	text	-
+gitcommitHeader	fg2	-	-	text	-
+gitcommitHead	dim2	-	-	text	-
+gitcommitSelectedType	pink	-	-	accent	-
+gitcommitSelectedFile	pink	-	-	accent	-
+gitcommitDiscardedType	white	-	-	text	-
+gitcommitDiscardedFile	white	-	-	text	-
+gitcommitUntrackedFile	pink	-	-	accent	-
+DevIconDefault	mid	-	-	text	-

@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# check-contrast -- every colour this repo ships, against the floor it claims.
+#
+#   build/check-contrast              the default profile
+#   build/check-contrast --profile noir
+#   build/check-contrast --all        both profiles
+#   build/check-contrast --table      the before/after table for the README
+#
+# Needs bash and awk. No Noctalia, no Hyprland, no desktop, no network -- which
+# is the point: this is the half of the testing that CI can run, and the half
+# that would otherwise be somebody squinting at a screenshot.
+#
+# What it asserts
+# ---------------
+#   floors        every group in groups.tsv clears the floor of its class,
+#                 against the background it actually sits on
+#   ceilings      no role was lifted past what palette.toml allows
+#   green         `green` and `green_bright` came through untouched
+#   hierarchy     no role ended up brighter than a role above it
+#   ansi          the 21 slots that are upstream's still are
+#   emit          the committed output matches palette.toml
+#
+# The background a group sits on
+# ------------------------------
+# kitty makes a cell translucent only when its background is the DEFAULT
+# background (kitty 0.48.2: "it only sets the background color's opacity in
+# cells that have the same background color as the default terminal
+# background"). So:
+#
+#   bg = "-" or "none"   the group composites -> checked against T
+#   bg = <role>          the group is drawn opaque -> checked against that role
+#
+# Both cases are checked, and it matters which: bg3 is byte 50 and T is 36, so a
+# group on an explicit bg3 panel has LESS contrast than the same foreground on
+# the composited background. Checking everything against T alone would pass a
+# theme that is wrong inside every popup menu.
+
+set -uo pipefail
+export LC_ALL=C
+
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+PALETTE=$REPO/palette.toml
+GROUPS_TSV=$REPO/groups.tsv
+. "$REPO/build/lib-toml.sh"
+
+GREEN=$'\e[32m'; RED=$'\e[31m'; YELLOW=$'\e[33m'; DIM=$'\e[2m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
+[[ -t 1 ]] || { GREEN=; RED=; YELLOW=; DIM=; BOLD=; RESET=; }
+PASS=0; FAIL=0
+pass() { printf '%sPASS%s  %-14s %s\n' "$GREEN" "$RESET" "$1" "${2-}"; PASS=$((PASS+1)); }
+fail() { printf '%sFAIL%s  %-14s %s\n' "$RED" "$RESET" "$1" "${2-}"; FAIL=$((FAIL+1)); }
+info() { printf '      %s%s%s\n' "$DIM" "$1" "$RESET"; }
+
+verdict() {
+    local name=$1 ok=$2; shift 2
+    if (( $# == 0 )); then pass "$name" "$ok"
+    else fail "$name" "$# problem(s)"; local p; for p in "$@"; do info "$p"; done; fi
+}
+
+PROFILE=$(toml_get meta profile); ALL=0; TABLE=0
+while (( $# )); do
+    case $1 in
+        --profile) PROFILE=$2; shift 2 ;;
+        --all)     ALL=1; shift ;;
+        --table)   TABLE=1; shift ;;
+        -h|--help) awk 'NR<3{next} /^#[[:space:]]*$/{if(s)exit;next} {sub(/^# ?/,"");print;s=1}' "$0"; exit 2 ;;
+        *) printf 'check-contrast: unknown argument %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+FT=""; FC=""; FA=""; RAMP=""
+load_profile() {
+    FT=$(toml_get "profile.$1" text); FC=$(toml_get "profile.$1" chrome)
+    FA=$(toml_get "profile.$1" accent)
+    RAMP=$({ toml_section ramp; toml_section ramp_extra; })
+}
+# solved_on <surface #rrggbb>
+solved_on() { printf '%s\n' "$RAMP" | solve_surface "$1" "$FT" "$FC" "$FA"; }
+# surface_hex <role|default> <T>
+surface_hex() {
+    [[ $1 == default ]] && { awk -v b="$2" "$AWK_LIB"'BEGIN { print hexb(b) }'; return; }
+    printf '%s\n' "$RAMP" | awk -F'\t' -v r="$1" '$1==r{print $2;exit}'
+}
+# solved <profile> -- the default surface only.
+#
+# load_profile is called by the CALLER, never from inside here: this runs in a
+# command substitution, and a subshell's variable assignments do not reach the
+# parent. Setting FT/FC/FA in here left them empty in run_profile, awk divided
+# by a floor of zero on every role, and the checks still printed PASS because an
+# empty colour reads as luminance 0 and beats every floor. A test that passes
+# when its own inputs are missing is worse than no test.
+solved() { solved_on "$(awk -v b="$(toml_get "profile.$1" T)" "$AWK_LIB"'BEGIN { print hexb(b) }')"; }
+
+run_profile() {
+    local p=$1 T
+    T=$(toml_get "profile.$p" T)
+    printf '\n%sprofile %s%s  T = %s, lift = %s   %s%s%s\n\n' \
+        "$BOLD" "$p" "$RESET" "$T" "$((T - 18))" "$DIM" "$(toml_get "profile.$p" claims)" "$RESET"
+
+    load_profile "$p"
+    local SOLVED; SOLVED=$(solved "$p")
+    [[ -n $FT && -n $FC && -n $FA && -n $RAMP ]] || { fail floors "profile $p did not load"; return 1; }
+
+    # --- floors ------------------------------------------------------------
+    #
+    # Every group, against the background it actually sits on. A group with no
+    # background composites and is checked against T; a group with an explicit
+    # background is drawn opaque and is checked against that colour, because
+    # kitty makes only default-background cells translucent.
+    local -a problems=()
+    local n=0 group fg bg sp cls floor fghex bghex r surf
+    while IFS=$'\t' read -r group fg bg sp cls _attrs; do
+        [[ $group == \#* || -z $group ]] && continue
+        [[ $cls == fixed && $fg == - && $sp == - ]] && continue
+        case $cls in
+            text)   floor=$FT ;;
+            chrome) floor=$FC ;;
+            accent) floor=$FA ;;
+            inverse) floor=$FT ;;
+            *)      continue ;;
+        esac
+        local mark=$fg
+        [[ $mark == - ]] && mark=$sp
+        # A row with no foreground and no undercurl colour inherits Normal's.
+        [[ $mark == - ]] && mark=fg2
+        surf=default; [[ $bg != - && $bg != none ]] && surf=$bg
+        bghex=$(surface_hex "$surf" "$T")
+        if [[ $cls == fixed ]]; then
+            fghex=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$mark" '$1==r && $2=="fixed"{print $3;exit}')
+        elif [[ $cls == inverse ]]; then
+            # The foreground stays as written and the BACKGROUND is what moved,
+            # so the check has to look the background up the same way emit did.
+            fghex=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$mark" '$1==r && $2=="fixed"{print $3;exit}')
+            bghex=$(solved_on "$fghex" | awk -F'\t' -v r="$bg" '$1==r && $2=="text"{print $3;exit}')
+        else
+            fghex=$(solved_on "$bghex" | awk -F'\t' -v r="$mark" -v c="$cls" '$1==r && $2==c{print $3;exit}')
+        fi
+        n=$((n + 1))
+        r=$(awk -v a="$fghex" -v b="$bghex" "$AWK_LIB"'BEGIN { printf "%.2f", ratio(lum(a), lum(b)) }')
+        awk -v r="$r" -v f="$floor" 'BEGIN { exit !(r < f - 0.005) }' &&
+            problems+=("$group: $fghex on ${surf/default/T=$T} ($bghex) = ${r}:1, floor $floor ($cls)")
+    done < "$GROUPS_TSV"
+    verdict floors "$n groups clear the floor of their class, on their own background" "${problems[@]}"
+
+    # --- ceilings ----------------------------------------------------------
+    problems=()
+    out=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v pal="$PALETTE" "$AWK_LIB"'
+    { col[$1 SUBSEP $2] = $3 }
+    END {
+        while ((getline line < pal) > 0) {
+            if (line ~ /^[[:space:]]*#/) continue
+            if (line ~ /^[[:space:]]*\[/) { t = line; gsub(/[][[:space:]]/, "", t); tbl = t; continue }
+            if (tbl != "ceiling") continue
+            eq = index(line, "="); if (!eq) continue
+            role = substr(line, 1, eq - 1); gsub(/[[:space:]]/, "", role)
+            v = substr(line, eq + 1); sub(/^[[:space:]]*"/, "", v); sub(/".*$/, "", v)
+            if (role == "" || v == "") continue
+            capb = hex2(substr(col[v SUBSEP "fixed"], 2, 2))
+            n++
+            for (c = 1; c <= 2; c++) {
+                cls = (c == 1) ? "text" : "chrome"
+                got = hex2(substr(col[role SUBSEP cls], 2, 2))
+                if (got > capb)
+                    printf "%s (%s) solved to %d, ceiling is %s = %d\n", role, cls, got, v, capb
+            }
+        }
+        printf "#N %d\n", n
+    }')
+    n=$(printf '%s\n' "$out" | sed -n 's/^#N //p')
+    while IFS= read -r l; do [[ -n $l && $l != \#N* ]] && problems+=("$l"); done <<<"$out"
+    verdict ceilings "$n roles stayed under their ceiling" "${problems[@]}"
+
+    # --- the greens --------------------------------------------------------
+    #
+    # The one assertion this repo exists to keep. Deriving the ANSI greens from
+    # the editor greys gives a grey-green and quietly breaks `git diff` and
+    # `ls`, and a solver that lifts everything by rule is exactly the thing that
+    # would do it. So it is checked rather than trusted.
+    problems=()
+    local role want got
+    for role in green green_bright; do
+        want=$(toml_get ramp "$role")
+        for cls in text chrome accent fixed; do
+            got=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$role" -v c="$cls" '$1==r&&$2==c{print $3;exit}')
+            [[ $got == "$want" ]] || problems+=("$role ($cls) came out $got, not $want")
+        done
+    done
+    verdict green "the ANSI greens are untouched in every class" "${problems[@]}"
+
+    # --- hierarchy ---------------------------------------------------------
+    #
+    # "Still noirblaze" as an assertion: within a class, a role may never end up
+    # brighter than a role that sits above it on the static ramp. Roles are
+    # allowed to MERGE -- the dim band does, and that is the documented cost --
+    # but they may never swap places.
+    problems=()
+    out=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v pal="$PALETTE" "$AWK_LIB"'
+    { col[$1 SUBSEP $2] = $3 }
+    END {
+        split("bg3 dim1 dim2 dim3 dim4 mid fg4 fg3 fg2 fg1 fg0 white", order, " ")
+        while ((getline line < pal) > 0) {
+            if (line ~ /^[[:space:]]*\[/) { t = line; gsub(/[][[:space:]]/, "", t); tbl = t }
+        }
+        for (c = 1; c <= 2; c++) {
+            cls = (c == 1) ? "text" : "chrome"
+            for (i = 2; i <= 12; i++) {
+                lo = hex2(substr(col[order[i-1] SUBSEP cls], 2, 2))
+                hi = hex2(substr(col[order[i] SUBSEP cls], 2, 2))
+                n++
+                if (lo > hi) printf "%s (%s) at %d is brighter than %s at %d\n",
+                                    order[i-1], cls, lo, order[i], hi
+            }
+        }
+        printf "#N %d\n", n
+    }')
+    n=$(printf '%s\n' "$out" | sed -n 's/^#N //p')
+    while IFS= read -r l; do [[ -n $l && $l != \#N* ]] && problems+=("$l"); done <<<"$out"
+    verdict hierarchy "$n adjacent pairs still in order" "${problems[@]}"
+}
+
+# --- the 21 upstream ANSI values ------------------------------------------
+#
+# Recorded here as literals ON PURPOSE, and it is the one place in the repo
+# where a colour is written outside palette.toml. That is what makes it a test:
+# if palette.toml drifts from what upstream ships, this says so, and the README
+# stops being able to claim the block is upstream's.
+check_upstream() {
+    local -a problems=()
+    local want got slot
+    # n1ghtmare/noirblaze-kitty, MIT, (c) 2023 Dimitar Dimitrov, fetched 2026-09-05.
+    # color2 and color10 are deliberately NOT here: upstream sets both to pink.
+    local -A UP=(
+        [background]=#121212 [foreground]=#d5d5d5 [cursor]=#ff0088
+        [selectionBg]=#b0b0b0 [selectionFg]=#121212
+        [normal.black]=#121212 [normal.red]=#ff0088 [normal.yellow]=#ffffff
+        [normal.blue]=#b0b0b0 [normal.magenta]=#7a7a7a [normal.cyan]=#787878
+        [normal.white]=#d5d5d5
+        [bright.black]=#737373 [bright.red]=#fd319e [bright.yellow]=#fdfdfd
+        [bright.blue]=#bebebe [bright.magenta]=#939393 [bright.cyan]=#919191
+        [bright.white]=#f5f5f5
+    )
+    # The static ramp, before any solve -- that is what "upstream's" means.
+    local -A ROLE=(
+        [background]=bg [foreground]=fg1 [cursor]=pink [selectionBg]=fg3 [selectionFg]=bg
+        [normal.black]=bg [normal.red]=pink [normal.yellow]=white [normal.blue]=fg3
+        [normal.magenta]=dim4 [normal.cyan]=dim3 [normal.white]=fg1
+        [bright.black]=dim2 [bright.red]=pink_bright [bright.yellow]=white_bright
+        [bright.blue]=fg3_bright [bright.magenta]=mid_bright [bright.cyan]=mid_bright2
+        [bright.white]=fg0
+    )
+    for slot in "${!UP[@]}"; do
+        got=$(toml_get ramp "${ROLE[$slot]}" 2>/dev/null) || got=$(toml_get ramp_extra "${ROLE[$slot]}")
+        [[ ${got,,} == "${UP[$slot],,}" ]] || problems+=("$slot: palette.toml has $got, upstream has ${UP[$slot]}")
+    done
+    verdict upstream "${#UP[@]} terminal values still match upstream verbatim" "${problems[@]}"
+}
+
+check_emit() {
+    if "$REPO/build/emit" --check >/dev/null 2>&1; then
+        pass emit "the committed output matches palette.toml"
+    else
+        fail emit "colors/ or dist/ is stale -- run build/emit and commit"
+    fi
+}
+
+# --- the README table ------------------------------------------------------
+
+emit_table() {
+    local T; T=$(toml_get "profile.$PROFILE" T)
+    load_profile "$PROFILE"
+    local Thex; Thex=$(awk -v b="$T" "$AWK_LIB"'BEGIN { print hexb(b) }')
+    local SOLVED; SOLVED=$(solved_on "$Thex")
+
+    printf 'Measured with `build/check-contrast --table`, profile `%s`.\n\n' "$PROFILE"
+    printf 'Ratios are WCAG 2.x, sRGB linearisation. "on `#121212`" is the theme opaque;\n'
+    printf '"at T=%s" is the same text seen through a terminal at the recommended opacity\n' "$T"
+    printf 'over a backdrop of %s.\n\n' "$(toml_get backdrop assumed)"
+    printf '| role | used by | before | on `#121212` | after | at T=%s |\n' "$T"
+    printf '|---|---|---|---|---|---|\n'
+
+    local role used cls before after r1 r2 flag
+    while IFS='|' read -r role used cls; do
+        [[ -n $role ]] || continue
+        before=$(toml_get ramp "$role" 2>/dev/null) || before=$(toml_get ramp_extra "$role")
+        after=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$role" -v c="$cls" '$1==r && $2==c{print $3;exit}')
+        r1=$(cr "$before" '#121212'); r2=$(cr "$after" "$Thex")
+        # Mark the ones that were below their floor before, since that is the
+        # column the whole exercise is about.
+        case $cls in text) flag=$FT ;; chrome) flag=$FC ;; *) flag=$FA ;; esac
+        awk -v r="$r1" -v f="$flag" 'BEGIN { exit !(r < f) }' && r1="**$r1**"
+        local suffix=""
+        [[ $before == "$after" ]] && suffix=" *(unchanged)*"
+        printf '| `%s` | %s | `%s` | %s | `%s`%s | %s |\n' \
+               "$role" "$used" "$before" "$r1" "$after" "$suffix" "$r2"
+    done <<'ROWS'
+bg3|`LineNr`, `NonText`|chrome
+dim1|`WinSeparator`, `Conceal`, tag delimiters|chrome
+dim1|`Comment`, `@comment`|text
+dim2|`Include`, `@punctuation.*`, ANSI `bright.black`|text
+dim3|`String`, `Character`, ANSI `normal.cyan`|text
+dim4|`Type`, `@type`, ANSI `normal.magenta`|text
+mid|`Keyword`, `Conditional`, `DiagnosticWarn`|text
+fg4|`@attribute`, `@lsp.type.decorator`|text
+fg3|`Statement`, `Operator`, ANSI `normal.blue`|text
+fg2|`Normal`|text
+fg1|`@variable`, `@property`, ANSI `normal.white`|text
+fg0|`@function.method`, `Question`|text
+white|`Identifier`, `@function`|text
+pink|accent, cursor, `Function`, `Constant`|accent
+green|ANSI `normal.green`, `git diff +`|fixed
+green_bright|ANSI `bright.green`, `ls` executables|fixed
+ROWS
+    printf '\n**Bold** is below the floor for its class '
+    printf '(text %s:1, chrome %s:1, accent %s:1).\n' "$FT" "$FC" "$FA"
+}
+
+# cr <hex a> <hex b> -- the contrast ratio, two decimals.
+cr() { awk -v a="$1" -v b="$2" "$AWK_LIB"'BEGIN { printf "%.2f", ratio(lum(a), lum(b)) }'; }
+# hexof <byte>
+hexof() { awk -v b="$1" "$AWK_LIB"'BEGIN { print hexb(b) }'; }
+
+# ---------------------------------------------------------------------------
+
+if (( TABLE )); then emit_table; exit 0; fi
+
+printf '%scontrast checks%s  %s\n' "$BOLD" "$RESET" "$REPO"
+if (( ALL )); then
+    for p in $(toml_profiles); do run_profile "$p"; done
+else
+    run_profile "$PROFILE"
+fi
+printf '\n'
+check_upstream
+check_emit
+printf '\n%s%d passed, %d failed%s\n' "$BOLD" "$PASS" "$FAIL" "$RESET"
+(( FAIL == 0 ))

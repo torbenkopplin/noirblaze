@@ -1,0 +1,312 @@
+# noirblaze -- the source of truth.
+#
+# Every colour in this repository is typed here and nowhere else. build/emit
+# renders colors/noirblaze.lua and everything under dist/ from this file plus
+# groups.tsv; CI regenerates them and fails on a diff, so that claim is enforced
+# rather than asserted.
+#
+# The theme is dark only. Both of the setups this was extracted from are dark
+# only, and inventing a light variant would mean shipping colours nobody chose.
+# Noctalia falls back to the dark variant when mode = light, so nothing breaks.
+#
+# See docs/design.md for how the numbers below were arrived at, and
+# docs/decisions/ for the short form.
+
+[meta]
+name    = "noirblaze"
+profile = "aa"          # the profile dist/ is built from
+
+# ---------------------------------------------------------------------------
+# The ramp
+#
+# Fifteen colours, from n1ghtmare/noirblaze-vim (MIT, (c) 2025 Dimitar
+# Dimitrov), renamed by position. See ATTRIBUTION below: this set is upstream's
+# and the names are ours.
+#
+# The bytes in brackets are what the solver works in. Contrast is computed in
+# WCAG 2.x relative luminance and the answer is converted back to a byte, so
+# these are sRGB values and not linear ones.
+# ---------------------------------------------------------------------------
+
+[ramp]
+bg    = "#121212"   #  18   the ground. Also terminal.background and ANSI 0.
+bg2   = "#212121"   #  33   CursorLine, virtual text backing
+bg3   = "#323232"   #  50   panels: Pmenu, StatusLine, Folded, Diff, Visual
+dim1  = "#535353"   #  83   comments, separators, tag delimiters
+dim2  = "#737373"   # 115   includes, punctuation, ANSI bright.black
+dim3  = "#787878"   # 120   strings, ANSI normal.cyan
+dim4  = "#7a7a7a"   # 122   types, ANSI normal.magenta
+mid   = "#949494"   # 148   keywords
+fg4   = "#a7a7a7"   # 167   attributes, decorators
+fg3   = "#b0b0b0"   # 176   statements, operators, ANSI normal.blue
+fg2   = "#b4b4b4"   # 180   Normal
+fg1   = "#d5d5d5"   # 213   variables, properties, ANSI normal.white
+fg0   = "#f5f5f5"   # 245   methods, constructors
+white = "#ffffff"   # 255   identifiers, functions
+
+# The accent. Chromatic, so it cannot be lifted along the grey ramp: see
+# decision 005. Held fixed by every profile.
+pink  = "#ff0088"
+
+# The one real colour in the ANSI block, and not upstream's -- upstream sets
+# ANSI 2 to #ff0088. Deriving a green from the editor greys gives a grey-green
+# and quietly breaks `git diff` and `ls`. The solver may not touch it, and
+# build/check-contrast asserts that it did not: at 13.89:1 opaque and 4.05:1
+# against a backdrop of 212 it never binds a floor anyway.
+green        = "#00ff77"
+
+# ANSI 10, the bright sibling of `green`. Derived, not picked: every
+# normal/bright pair in this block is the same hue at higher HSL lightness
+# (red +9.2, magenta +9.8, cyan +9.8, blue +5.5), and this is the red pair's own
+# +9.2 applied to `green`. Upstream leaves ANSI 10 at #fd319e, i.e. pink, which
+# is why `ls` disagreed with `git diff` about what "green" means.
+green_bright = "#2eff8f"
+
+# The bright pinks, upstream's, unchanged.
+pink_bright  = "#fd319e"
+
+# ---------------------------------------------------------------------------
+# Classes and floors
+#
+# A palette role is not enough on its own: `dim1` is a comment (text, which you
+# read) and a window separator (decoration, which you do not). So the solve
+# works on ROLE + CLASS pairs, and groups.tsv says which class each highlight
+# group is in.
+#
+#   text     WCAG 2.2 SC 1.4.3, 4.5:1. Anything a person reads.
+#   chrome   SC 1.4.11 non-text, 3:1. Gutters, separators, indent guides,
+#            scrollbars, tag delimiters -- marks that carry position, not
+#            content. CursorLineNr is deliberately NOT in here: the current
+#            line's number is the one gutter figure that is actually read.
+#   accent   3:1, and it is a stated exception rather than a class -- see
+#            decision 005. 4.5:1 would need the composited background at or
+#            below byte 29, which caps lift at 11 against the harness's
+#            LIFT_MIN of 12. An AA accent and visible glass are mutually
+#            exclusive by one level of 255.
+#   fixed    not solved at all. Backgrounds, and `green`.
+# ---------------------------------------------------------------------------
+
+[class.text]
+floor = 4.5
+
+[class.chrome]
+floor = 3.0
+
+[class.accent]
+floor = 3.0
+
+[class.fixed]
+floor = 0.0
+
+# ---------------------------------------------------------------------------
+# Ceilings
+#
+# The brightest a role may be lifted to, named as another role so that
+# re-spacing the ramp re-derives every ceiling for free.
+#
+# The ceiling never shapes the output -- the solve is
+# `max(static, minFG(T, floor))` and T is fixed by the profile. What a ceiling
+# does is DETECT the case where the floor has climbed past what the theme can
+# absorb, so build/solve refuses with a number instead of silently flattening.
+#
+# Why a table and not "N steps below the role above": dim3 and dim4 are two
+# bytes apart and dim2/dim3 are five, so any N >= 3 declares the shipped theme
+# in violation of itself. Which roles share a band is authorial knowledge that a
+# relative rule does not have. See decision 002.
+# ---------------------------------------------------------------------------
+
+[ceiling]
+bg3  = "mid"     # gutter may reach the keyword grey, no further
+dim1 = "mid"
+dim2 = "fg4"
+dim3 = "fg4"
+dim4 = "fg4"
+mid  = "fg3"
+fg4  = "fg2"
+fg3  = "fg1"
+fg2  = "fg1"
+
+# ---------------------------------------------------------------------------
+# Profiles
+#
+# Both ship. They share every colour, every role assignment and every ceiling;
+# they differ only in T -- the composited background byte the ramp is solved
+# against -- and in what they claim.
+#
+# The whole problem reduces to T. A translucent terminal composites as
+#
+#   seen_bg = own_bg * alpha + backdrop * (1 - alpha)
+#
+# so, writing T for that composited byte, lift = T - own_bg = T - 18 and the
+# BACKDROP CANCELS. Every constraint is a constraint on T alone, the ramp is a
+# function of T, and the ramp therefore does not depend on the wallpaper at all.
+# Only the opacity does:
+#
+#   alpha = (backdrop - T) / (backdrop - own_bg)
+#
+# That is why dist/ is exact rather than a worst-case approximation, and why
+# neovim has nothing to learn at runtime. See docs/design.md section 2.
+# ---------------------------------------------------------------------------
+
+[profile.aa]
+T          = 36
+claims     = "WCAG 2.2 AA: 4.5:1 for text, 3:1 for non-text"
+text       = 4.5
+chrome     = 3.0
+accent     = 3.0
+# lift = T - 18 = 18, against the harness's LIFT_MIN of 12 and the 17 that
+# decision 011 in the dots repo measured and shipped. Chosen over T = 46 because
+# a measured backdrop sd of 68.7 (not the 20 that decision was taken on) makes
+# it feasible on 85% of the wallpaper library, and it keeps `mid` distinct from
+# the dim band. T = 46 collapses Comment, String, Type, Include AND Keyword into
+# one grey. See decision 003.
+
+[profile.noir]
+T          = 36
+claims     = "none -- states its own ratios and does not claim AA"
+text       = 3.0
+chrome     = 1.8
+accent     = 3.0
+# Same T as `aa`, deliberately: the two profiles differ in what they CLAIM, not
+# in how much glass you get. Both are solved against the same composited
+# background, so their ratios are directly comparable and switching profile
+# never changes the opacity.
+#
+# Keeps the dim band. It exists because the alternative to shipping it is people
+# editing the ramp by hand, which is the duplication this repo was made to end.
+# It still fixes the two things that are not aesthetics:
+#   bg3 as a foreground is 1.46:1 on its own background -- invisible, not dim.
+#   dim1 crosses through 1.02:1 at a backdrop of 160, where the composited
+#   background passes the text's own luminance and the two swap places.
+# Contrast is not monotonic in the backdrop (1.60 at 95, 1.15 at 143, 1.02 at
+# 160, 1.41 at 212), which is why the solver uses the closed form and never
+# bisects.
+
+# ---------------------------------------------------------------------------
+# The backdrop dist/ assumes
+#
+# Only the recommended opacity depends on this; the colours do not (see the
+# note under [profile] above). Measured over the 41 ultrawide wallpapers in
+# ~/Pictures/Wallpapers, cropped to 3440x1440 as fill_mode = "crop" presents
+# them and reduced to window-sized tiles, because blur.xray is false and a
+# window samples the wallpaper behind ITSELF:
+#
+#   whole displayed crop   median 101   p90 170   max 197
+#   brightest window tile  median 153   p90 212   max 238
+#
+# A whole-image mean understates the backdrop a window actually sits on by
+# about 50 levels. The assumption below is the median brightest tile: the
+# wallpaper is half as likely to be brighter as darker, at the worst place you
+# can put a window on it.
+#
+# Validated against the screen, 2026-09-05, `noct-check glass-visible`:
+# predicted 139 for the centre tile, measured 137.4 -- 1.2% error.
+# ---------------------------------------------------------------------------
+
+[backdrop]
+assumed = 153
+note    = "median brightest window-sized tile, 41 ultrawide wallpapers, 2026-09-05"
+
+# ---------------------------------------------------------------------------
+# ANSI, the 16 slots
+#
+# Values are ramp role names. This block reaches kitty, foot, ghostty and every
+# shell tool that paints with the 16 slots -- which is how btop, starship, yazi,
+# fish, delta, fzf, bat and ls get themed with no per-tool configuration.
+#
+# Twenty-one of the twenty-two terminal values are upstream's
+# (n1ghtmare/noirblaze-kitty, MIT, (c) 2023 Dimitar Dimitrov), verbatim. The two
+# that are not are `green` and `green_bright`; see their notes above.
+# ---------------------------------------------------------------------------
+
+[ansi.normal]
+black   = "bg"
+red     = "pink"
+green   = "green"
+yellow  = "white"
+blue    = "fg3"
+magenta = "dim4"
+cyan    = "dim3"
+white   = "fg1"
+
+[ansi.bright]
+black   = "dim2"
+red     = "pink_bright"
+green   = "green_bright"
+yellow  = "white_bright"
+blue    = "fg3_bright"
+magenta = "mid_bright"
+cyan    = "mid_bright2"
+white   = "fg0"
+
+# The three bright greys upstream carries that are not on the ramp. Named
+# rather than inlined so that the "no colour is typed outside [ramp]" rule
+# holds; they are solved like any other text role.
+[ramp_extra]
+white_bright = "#fdfdfd"   # ANSI 11, upstream
+fg3_bright   = "#bebebe"   # ANSI 12, upstream
+mid_bright   = "#939393"   # ANSI 13, upstream
+mid_bright2  = "#919191"   # ANSI 14, upstream
+
+[ansi.class]
+# Every slot is text except the ones named here.
+default = "text"
+
+# ANSI 0 is the BACKGROUND colour, not a foreground. Upstream sets it to the
+# theme background (its own comment records that the "original color" was
+# #535353), and solving it as text would lift the terminal's black to #8b8b8b
+# and turn every default-background cell grey. Held fixed.
+#
+# The consequence, stated: ANSI 0 used AS a foreground is invisible on this
+# theme. That is inherent to a dark palette whose black is its background, it
+# is upstream's choice, and no floor can fix it without breaking the background.
+normal_black = "fixed"
+
+normal_red   = "accent"
+bright_red   = "accent"
+normal_green = "fixed"      # see the note on `green`
+bright_green = "fixed"
+
+# ---------------------------------------------------------------------------
+# The Noctalia palette's 20 Material roles
+#
+# Values are ramp role names. Noctalia derives outline_variant and the rest
+# from these; the terminal block above is passed through untouched.
+# ---------------------------------------------------------------------------
+
+[material]
+mPrimary          = "pink"
+mOnPrimary        = "bg"
+mSecondary        = "mid"
+mOnSecondary      = "bg"
+mTertiary         = "white"
+mOnTertiary       = "bg"
+mError            = "pink"
+mOnError          = "bg"
+mSurface          = "bg"
+mOnSurface        = "fg1"
+mSurfaceVariant   = "bg3"
+mOnSurfaceVariant = "fg3"
+mOutline          = "dim1"
+mShadow           = "#000000"
+mHover            = "bg2"
+mOnHover          = "fg0"
+
+# ---------------------------------------------------------------------------
+# Attribution. Rendered into README.md, dist/noirblaze.json and
+# colors/noirblaze.lua, so it cannot be lost by copying one file out.
+# ---------------------------------------------------------------------------
+
+[attribution]
+licence = "MIT"
+holder  = "Torben Kopplin"
+year    = "2026"
+
+upstream_palette   = "n1ghtmare/noirblaze-vim, MIT, (c) 2025 Dimitar Dimitrov"
+upstream_terminal  = "n1ghtmare/noirblaze-kitty, MIT, (c) 2023 Dimitar Dimitrov"
+note = """
+The fifteen ramp colours and 55 of the 57 base highlight groups this theme
+shares with noirblaze-vim are upstream's. The treesitter (@*), LSP semantic
+token, diagnostic, devicon and XML/HTML groups -- 92 of them -- are not, nor is
+`green`, `green_bright`, the contrast solve or the adaptive opacity.
+"""

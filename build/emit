@@ -1,0 +1,458 @@
+#!/usr/bin/env bash
+# emit -- palette.toml + groups.tsv  ->  every generated artefact.
+#
+#   build/emit                 the default profile, into the tracked paths
+#   build/emit --profile noir  the other one
+#   build/emit --check         regenerate into a temporary directory and diff,
+#                              so CI can assert the committed output is current
+#
+# Writes:
+#   colors/noirblaze.lua       the neovim colourscheme, loadable by vim.pack
+#   dist/noirblaze.json        the Noctalia palette
+#   dist/kitty-colors.conf     the 16 ANSI slots, for a kitty with no Noctalia
+#   dist/glass.conf.sample     the recommended terminal opacity, and what it
+#                              assumes
+#
+# All four are COMMITTED. That is what makes the repo degrade to static: a
+# stranger with no Noctalia, no noct-glass and no wallpaper hook clones this and
+# gets a working colourscheme with nothing to run. CI regenerates and diffs, so
+# "palette.toml is the only place a colour is typed by hand" is enforced rather
+# than asserted.
+#
+# The solve
+# ---------
+# Every grey role is lifted to `max(static, minfg(T, floor-of-its-class))`, and
+# a role used in two classes is solved twice -- `dim1` is a comment (text, which
+# you read) and a window separator (decoration, which you do not), and those are
+# not the same colour any more. groups.tsv says which class each group is in.
+#
+# The solve never DARKENS. A role already above its floor is left exactly as it
+# was, so nothing is changed that did not have to be.
+#
+# Chromatic roles -- pink, green and their bright siblings -- are never solved.
+# A grey ramp cannot lift a hue without desaturating it, and `green` is the one
+# real colour in the ANSI block: derive it from the editor greys and you get a
+# grey-green that quietly breaks `git diff` and `ls`. build/check-contrast
+# asserts they came through untouched.
+
+set -uo pipefail
+export LC_ALL=C
+
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+PALETTE=$REPO/palette.toml
+# NOT "GROUPS": that is a bash builtin array of the current user's group ids, and
+# assigning a scalar to it is silently ignored -- awk then got "1000" as its
+# input file. Cost twenty minutes once; the name stays explicit.
+GROUPS_TSV=$REPO/groups.tsv
+
+PROFILE=""; CHECK=0; OUT=$REPO
+while (( $# )); do
+    case $1 in
+        --profile) PROFILE=$2; shift 2 ;;
+        --check)   CHECK=1; shift ;;
+        -h|--help) awk 'NR<3{next} /^#[[:space:]]*$/{if(s)exit;next} {sub(/^# ?/,"");print;s=1}' "$0"; exit 2 ;;
+        *) printf 'emit: unknown argument %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+. "$REPO/build/lib-toml.sh"
+
+[[ -n $PROFILE ]] || PROFILE=$(toml_get meta profile)
+T=$(toml_get "profile.$PROFILE" T)
+STAMP=$(toml_get backdrop assumed)
+
+if (( CHECK )); then
+    OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
+    mkdir -p "$OUT/colors" "$OUT/dist"
+fi
+mkdir -p "$OUT/colors" "$OUT/dist"
+
+# ---------------------------------------------------------------------------
+# Solve
+#
+# A group's colour depends on THREE things: its palette role, its contrast class
+# and the background it actually sits on. The third is not optional -- kitty
+# makes only default-background cells translucent, so a group with an explicit
+# background is drawn opaque against that colour, and bg3 (byte 50) is lighter
+# than the composited background (T = 36). A foreground solved against T alone
+# lands at 3.76:1 inside every popup menu.
+#
+# So the solve runs once per SURFACE, and the emitted Lua carries one table per
+# (class, surface) pair the groups actually use. `pairs_used` discovers those
+# rather than listing them, so a new panel colour cannot be missed.
+# ---------------------------------------------------------------------------
+
+FT=$(toml_get "profile.$PROFILE" text)
+FC=$(toml_get "profile.$PROFILE" chrome)
+FA=$(toml_get "profile.$PROFILE" accent)
+
+RAMP=$({ toml_section ramp; toml_section ramp_extra; })
+
+# solved_on <surface byte> -- role<TAB>class<TAB>hex for that surface.
+solved_on() { printf '%s\n' "$RAMP" | solve_surface "$1" "$FT" "$FC" "$FA"; }
+
+# SOLVED is the default surface, T. Everything that has no explicit background
+# uses it, which is almost everything.
+SOLVED=$(solved_on "$(awk -v b="$T" "$AWK_LIB"'BEGIN { print hexb(b) }')")
+
+# surface_hex <role|default> -- the colour a group's text sits on. "default" is
+# the composited background, which is the theme's own bg seen at T.
+surface_hex() {
+    [[ $1 == default ]] && { awk -v b="$T" "$AWK_LIB"'BEGIN { print hexb(b) }'; return; }
+    printf '%s\n' "$RAMP" | awk -F'\t' -v r="$1" '$1==r{print $2;exit}'
+}
+
+# hex <role> <class> [surface] -- the solved colour.
+#
+# An inverse row is looked up in the `text` class -- a highlighted match or a
+# ":more" prompt is text and takes the text floor; what makes it inverse is only
+# which of the two roles moves.
+hex() {
+    local tbl cls=$2
+    [[ $cls == inverse ]] && cls=text
+    if [[ ${3:-default} == default ]]; then tbl=$SOLVED
+    else tbl=$(solved_on "$(surface_hex "$3")"); fi
+    printf '%s\n' "$tbl" | awk -F'\t' -v r="$1" -v c="$cls" '$1==r && $2==c {print $3; exit}'
+}
+
+# pairs_used -- "class<TAB>surface<TAB>role" for every combination groups.tsv
+# needs.
+#
+# An `inverse` row is the same machinery with the two roles swapped. Its
+# foreground is already the darkest colour in the theme, so contrast is bought
+# by lifting the BACKGROUND -- and "lift this role until it clears R against
+# that colour" is exactly what solve_surface does. So the surface for an inverse
+# row is its FOREGROUND, and the role being solved is its background.
+#
+# MoreMsg is the one that needs it: #121212 on dim3 is 4.24:1, and the fix is
+# dim3 -> #7c7c7c, four bytes.
+pairs_used() {
+    awk -F'\t' '
+        /^#/ || NF < 6 { next }
+        {
+            cls = $5
+            if (cls == "fixed") next
+            if (cls == "inverse") {
+                if ($2 != "-" && $3 != "-" && $3 != "none") print "inverse\t" $2 "\t" $3
+                next
+            }
+            surf = ($3 == "-" || $3 == "none") ? "default" : $3
+            if ($2 != "-") print cls "\t" surf "\t" $2
+            if ($4 != "-") print cls "\t" surf "\t" $4
+        }' "$GROUPS_TSV" | sort -u
+}
+
+# tbl_name <class> <surface>
+tbl_name() {
+    case $1 in text) n=t ;; chrome) n=k ;; accent) n=a ;; inverse) n=b ;; *) n=c ;; esac
+    [[ $2 == default ]] && printf '%s' "$n" || printf '%s_%s' "$n" "$2"
+}
+
+# roles_fixed -- every role referenced as a background, or by a fixed/inverse
+# row, i.e. everything the `c` table has to carry.
+roles_fixed() {
+    awk -F'\t' '
+        /^#/ || NF < 6 { next }
+        $3 != "-" && $3 != "none" { print $3 }
+        ($5 == "fixed" || $5 == "inverse") { if ($2 != "-") print $2; if ($4 != "-") print $4 }
+    ' "$GROUPS_TSV" | sort -u
+}
+
+HEADER_LUA="-- noirblaze -- GENERATED by build/emit from palette.toml. Do not edit.
+--
+-- Profile '$PROFILE': $(toml_get "profile.$PROFILE" claims)
+-- Solved against a composited background of T = $T, i.e. the theme's own
+-- #121212 seen through a terminal at the recommended opacity over a backdrop of
+-- $STAMP. See docs/design.md; the colours below are correct at any opacity,
+-- because T is a property of the palette and not of the wallpaper.
+--
+-- $(toml_get attribution upstream_palette)
+-- $(toml_get attribution upstream_terminal)
+-- New work MIT, (c) $(toml_get attribution year) $(toml_get attribution holder). See LICENCE."
+
+# ---------------------------------------------------------------------------
+# colors/noirblaze.lua
+# ---------------------------------------------------------------------------
+
+emit_lua() {
+    printf '%s\n\n' "$HEADER_LUA"
+    cat <<'LUA'
+vim.opt.background = "dark"
+vim.g.colors_name = "noirblaze"
+
+local hi = function(group, opts) vim.api.nvim_set_hl(0, group, opts) end
+LUA
+    cat <<LUA
+
+-- The solved palette.
+--
+-- A role is not one colour any more. It is solved once per CONTRAST CLASS and
+-- once per SURFACE -- the background the text actually sits on:
+--
+--   c        as written in palette.toml. Backgrounds, the accent, the greens.
+--            Nothing here is solved: a background is not text, and a hue cannot
+--            be lifted along a grey ramp without ceasing to be that hue.
+--   t / k    text ($FT:1) and chrome ($FC:1) on the terminal's own background,
+--            which is the composited one -- T = $T. Almost everything.
+--   *_bg3    the same, on the panel shade. bg3 is byte 50 and T is $T, so a
+--            popup menu is LIGHTER than the buffer behind it and its text has
+--            to be brighter to match. A comment inside a popup is not the same
+--            colour as a comment in the buffer, and that is correct.
+--   *_dim1   on the selection shade, brighter again.
+--
+-- \`dim1\` is why: it is a comment (t, which you read), a window separator
+-- (k, which you do not) and a status line on a panel (t_bg3), and those stopped
+-- being one colour the moment the floors were applied.
+--
+-- Only the pairs the groups below actually use are emitted.
+local P = {}
+LUA
+    # `c` first: the raw palette.
+    printf 'P.c = {\n'
+    roles_fixed | while read -r role; do
+        printf '  %-14s = "%s",\n' "$role" "$(hex "$role" fixed)"
+    done
+    printf '}\n'
+    # then one table per (class, surface) pair in use.
+    pairs_used | awk -F'\t' '{ print $1 "\t" $2 }' | sort -u | while IFS=$'\t' read -r cls surf; do
+        printf 'P.%s = {\n' "$(tbl_name "$cls" "$surf")"
+        pairs_used | awk -F'\t' -v c="$cls" -v s="$surf" '$1==c && $2==s { print $3 }' | sort -u |
+        while read -r role; do
+            printf '  %-14s = "%s",\n' "$role" "$(hex "$role" "$cls" "$surf")"
+        done
+        printf '}\n'
+    done
+    cat <<'LUA'
+
+-- An optional generated ramp, for the adaptive layer. Absent in this repo and
+-- absent for anyone who clones it: nothing here writes it. It exists so the
+-- desktop side can override the solve later without patching this file, and so
+-- that standalone use never depends on it -- a stranger gets the tables above.
+--
+-- It merges by table name, so it can override one surface without restating
+-- the rest.
+local ok, gen = pcall(dofile, (vim.env.XDG_STATE_HOME or (vim.env.HOME .. "/.local/state"))
+  .. "/noirblaze/ramp.lua")
+if ok and type(gen) == "table" then
+  for tbl, vals in pairs(gen) do
+    if type(P[tbl]) == "table" and type(vals) == "table" then
+      for role, v in pairs(vals) do P[tbl][role] = v end
+    end
+  end
+end
+
+LUA
+    # Locals, so the highlight lines below read as they always did.
+    printf 'local c = P.c\n'
+    pairs_used | awk -F'\t' '{ print $1 "\t" $2 }' | sort -u | while IFS=$'\t' read -r cls surf; do
+        n=$(tbl_name "$cls" "$surf"); printf 'local %-8s = P.%s\n' "$n" "$n"
+    done
+    printf '\n'
+
+    # The highlight groups, straight out of groups.tsv.
+    awk -F'\t' '
+        /^#/ || NF < 6 { next }
+        {
+            group = $1; fg = $2; bg = $3; sp = $4; cls = $5; attrs = $6
+            # The table is (class, surface). fixed and inverse always take the
+            # raw palette: an inverse rows foreground IS a background colour,
+            # and solving it would lift the dark half of a light-on-dark pair.
+            if (cls == "fixed") tbl = "c"
+            else if (cls == "inverse") tbl = "c"   # the foreground; see bgtbl
+            else {
+                base = (cls == "text") ? "t" : (cls == "chrome") ? "k" : "a"
+                tbl = (bg == "-" || bg == "none") ? base : base "_" bg
+            }
+            n = 0; out = ""
+            if (fg != "-") { out = out sprintf("fg = %s.%s", tbl, fg); n++ }
+            bgtbl = (cls == "inverse") ? ("b_" fg) : "c"
+            if (bg == "none") { out = out (n++ ? ", " : "") "bg = \"none\"" }
+            else if (bg != "-") { out = out (n++ ? ", " : "") sprintf("bg = %s.%s", bgtbl, bg) }
+            if (sp != "-") { out = out (n++ ? ", " : "") sprintf("sp = %s.%s", tbl, sp) }
+            if (attrs != "-") {
+                split(attrs, a, ",")
+                for (i in a) { out = out (n++ ? ", " : "") a[i] " = true" }
+            }
+            if (n == 0) printf "hi(\"%s\", {})\n", group
+            else        printf "hi(\"%s\", { %s })\n", group, out
+        }' "$GROUPS_TSV"
+}
+
+# ---------------------------------------------------------------------------
+# dist/noirblaze.json -- the Noctalia palette
+# ---------------------------------------------------------------------------
+
+emit_json() {
+    local role
+    printf '{\n  "_comment": [\n'
+    while IFS= read -r line; do printf '    "%s",\n' "$line"; done <<JSONC
+noirblaze -- GENERATED by build/emit from palette.toml. Do not edit this file;
+edit palette.toml in the noirblaze repo and re-run build/emit.
+Profile '$PROFILE': $(toml_get "profile.$PROFILE" claims)
+The ramp is solved against a composited background of T = $T -- the theme's own
+#121212 as seen through a terminal at the recommended opacity over a backdrop
+of $STAMP ($(toml_get backdrop note)).
+The colours are correct at ANY opacity: T is a property of the palette, not of
+the wallpaper, so only the opacity is adaptive. bin/noct-glass in the dots repo
+computes it; dist/glass.conf.sample carries the static recommendation.
+Dark only, matching the source. Noctalia falls back to the dark variant when
+mode = light, so nothing breaks -- it just stays dark.
+ATTRIBUTION
+The 22-slot terminal block is upstream's, bar two values:
+  $(toml_get attribution upstream_terminal)
+  $(toml_get attribution upstream_palette)
+'green' (#00ff77) and 'green_bright' (#2eff8f) are NOT upstream's -- upstream
+sets ANSI 2 and ANSI 10 to pink. They are what make 'git diff' and 'ls'
+readable, and the solver is forbidden from touching them.
+New work MIT, (c) $(toml_get attribution year) $(toml_get attribution holder).
+Selected from the launcher with /theme, or:
+  noctalia msg color-scheme-set custom noirblaze
+JSONC
+    printf '    "-"\n  ],\n\n  "dark": {\n'
+    toml_section material | while IFS=$'\t' read -r key role; do
+        case $role in \#*) printf '    "%s": "%s",\n' "$key" "$role" ;;
+                      *)   printf '    "%s": "%s",\n' "$key" "$(hex "$role" fixed)" ;;
+        esac
+    done
+    printf '\n    "terminal": {\n'
+    printf '      "background": "%s",\n'   "$(hex bg fixed)"
+    printf '      "foreground": "%s",\n'   "$(hex fg1 text)"
+    printf '      "cursor": "%s",\n'       "$(hex pink accent)"
+    printf '      "cursorText": "%s",\n'   "$(hex bg fixed)"
+    printf '      "selectionBg": "%s",\n'  "$(hex fg3 text)"
+    printf '      "selectionFg": "%s",\n\n' "$(hex bg fixed)"
+    local band
+    for band in normal bright; do
+        printf '      "%s": {\n' "$band"
+        toml_section "ansi.$band" | while IFS=$'\t' read -r slot role; do
+            printf '        "%s": "%s"@\n' "$slot" "$(hex "$role" "$(ansi_class "$band" "$slot")")"
+        done | sed '$ s/@$//; s/@$/,/'
+        [[ $band == normal ]] && printf '      },\n\n' || printf '      }\n'
+    done
+    printf '    }\n  }\n}\n'
+}
+
+# ansi_class <normal|bright> <slot> -- which contrast class an ANSI slot is in.
+ansi_class() {
+    local v
+    v=$(toml_get ansi.class "${1}_${2}" 2>/dev/null) && { printf '%s' "$v"; return; }
+    toml_get ansi.class default
+}
+
+# ---------------------------------------------------------------------------
+# dist/kitty-colors.conf
+# ---------------------------------------------------------------------------
+
+emit_kitty() {
+    cat <<CONF
+# noirblaze -- GENERATED by build/emit from palette.toml. Do not edit.
+#
+# The 16 ANSI slots plus the basics, for a kitty with no Noctalia. Include it
+# from kitty.conf:
+#
+#     include /path/to/noirblaze/dist/kitty-colors.conf
+#
+# On a desktop running Noctalia this file is NOT what you want -- the palette is
+# rendered from dist/noirblaze.json through Noctalia's template engine, so that
+# a scheme change repaints terminals that are already open. See the README.
+#
+# Profile '$PROFILE': $(toml_get "profile.$PROFILE" claims)
+# Solved at T = $T, the composited background over a backdrop of $STAMP.
+#
+# Transparency is deliberately NOT set here. background_opacity belongs to
+# whatever owns the glass level on your machine, and setting it from a colour
+# file would fight that. dist/glass.conf.sample has the recommended number.
+
+foreground            $(hex fg1 text)
+background            $(hex bg fixed)
+
+cursor                $(hex pink accent)
+cursor_text_color     $(hex bg fixed)
+
+selection_foreground  $(hex fg1 text)
+selection_background  $(hex bg3 fixed)
+
+url_color             $(hex pink accent)
+
+CONF
+    local i=0 band slot role
+    for band in normal bright; do
+        printf '# %s\n' "$band"
+        while IFS=$'\t' read -r slot role; do
+            printf 'color%-3d %s\n' "$i" "$(hex "$role" "$(ansi_class "$band" "$slot")")"
+            i=$((i + 1))
+        done < <(toml_section "ansi.$band")
+        printf '\n'
+    done
+    cat <<CONF
+active_border_color   $(hex pink accent)
+inactive_border_color $(hex bg3 fixed)
+
+active_tab_foreground   $(hex bg fixed)
+active_tab_background   $(hex pink accent)
+inactive_tab_foreground $(hex fg1 text)
+inactive_tab_background $(hex bg3 fixed)
+CONF
+}
+
+# ---------------------------------------------------------------------------
+# dist/glass.conf.sample
+# ---------------------------------------------------------------------------
+
+emit_glass() {
+    local alpha
+    alpha=$("$REPO/build/solve" --profile "$PROFILE" --json | sed -n 's/.*"alpha":\([0-9.]*\).*/\1/p')
+    cat <<CONF
+# noirblaze -- the recommended terminal opacity. GENERATED by build/emit.
+#
+# THIS NUMBER IS THE ONLY THING IN THE REPOSITORY THAT ASSUMES A BACKDROP.
+# The colours do not: a translucent terminal composites as
+#
+#     seen_bg = own_bg x alpha + backdrop x (1 - alpha)
+#
+# so the lift is (T - own_bg) and the backdrop cancels out of every contrast
+# constraint. The ramp is solved against T and is correct on any wallpaper.
+# Only the opacity that REACHES T depends on what is behind the window.
+#
+# What this assumes
+# -----------------
+#   backdrop  $STAMP    $(toml_get backdrop note)
+#   T         $T        the composited background byte the ramp is solved at
+#   lift      $((T - 18))        against the 12 that reads as glass at all
+#
+# The backdrop figure is the median BRIGHTEST WINDOW-SIZED TILE, not the mean of
+# the image. With blur.xray off and columns tiling, a window samples the
+# wallpaper behind ITSELF -- and over 41 measured wallpapers the brightest tile
+# ran about 50 levels above the whole-image mean (median 153 against 101). A
+# whole-image mean is the wrong number and it is optimistic in the direction
+# that hurts.
+#
+# On a darker wallpaper this is more opacity than you need and the text is
+# merely more readable than required. On a brighter one it is not enough, and
+# the adaptive layer is the answer -- see the README.
+
+terminal = $alpha
+CONF
+}
+
+# ---------------------------------------------------------------------------
+
+emit_lua   > "$OUT/colors/noirblaze.lua"
+emit_json  > "$OUT/dist/noirblaze.json"
+emit_kitty > "$OUT/dist/kitty-colors.conf"
+emit_glass > "$OUT/dist/glass.conf.sample"
+
+if (( CHECK )); then
+    rc=0
+    for f in colors/noirblaze.lua dist/noirblaze.json dist/kitty-colors.conf dist/glass.conf.sample; do
+        if ! diff -q "$REPO/$f" "$OUT/$f" >/dev/null 2>&1; then
+            printf 'emit --check: %s is not what palette.toml says it should be\n' "$f" >&2
+            diff -u "$REPO/$f" "$OUT/$f" | head -20 >&2
+            rc=1
+        fi
+    done
+    (( rc )) && printf '\nRun build/emit and commit the result.\n' >&2
+    exit $rc
+fi
+
+printf 'emitted profile %s (T = %s) into %s\n' "$PROFILE" "$T" "${OUT#"$REPO"/}"

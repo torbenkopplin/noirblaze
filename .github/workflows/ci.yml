@@ -1,0 +1,96 @@
+# Everything about this repo that can be checked without a desktop -- which is
+# everything, on purpose. The solver takes a backdrop as an argument rather than
+# measuring one, so there is nothing here that needs Hyprland, Noctalia, a
+# wallpaper or a screen.
+#
+# What this catches that reading a diff does not: a colour edited in dist/
+# instead of in palette.toml (the emit check), a role lifted past its ceiling, a
+# floor that a group on a panel background quietly misses, and the ANSI greens
+# being derived away.
+
+name: checks
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # shellcheck ships on the runner; lua does not, and luac is what parses
+      # the colourscheme this repo's whole output is.
+      - name: install lua and shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends lua5.4 shellcheck
+
+      - name: versions
+        run: |
+          bash --version | head -1
+          awk -W version 2>/dev/null | head -1 || awk --version | head -1
+          shellcheck --version | sed -n 2p
+          luac5.4 -v
+          python3 --version
+
+      # palette.toml is parsed by fifteen lines of awk at runtime. This is what
+      # keeps that subset honest: if the file stops being real TOML, or the
+      # subset stops covering it, one of these two fails.
+      - name: palette.toml is valid TOML
+        run: python3 -c 'import tomllib; tomllib.load(open("palette.toml","rb"))'
+
+      - name: the generated output is current
+        run: build/emit --check
+
+      - name: colors/noirblaze.lua parses
+        run: luac5.4 -p colors/noirblaze.lua
+
+      - name: dist/noirblaze.json parses
+        run: python3 -c 'import json; json.load(open("dist/noirblaze.json"))'
+
+      - name: contrast, both profiles
+        run: build/check-contrast --all
+
+      - name: the solver refuses when it should
+        run: |
+          # A backdrop no wallpaper reaches, at a floor nothing can meet: the
+          # solver has to exit non-zero rather than print a plausible number.
+          if build/solve --backdrop 255 --floor 21 >/dev/null 2>&1; then
+            echo "solve accepted an impossible floor" >&2; exit 1
+          fi
+          build/solve --backdrop 153 --sd 68.7
+
+      - name: shellcheck
+        run: shellcheck --severity=warning --shell=bash --exclude=SC1090,SC1091,SC2016,SC2312,SC2034 build/solve build/emit build/check-contrast build/lib-toml.sh
+
+      - name: every relative link in the docs resolves
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          files = subprocess.run(['git','ls-files','-z','*.md'], capture_output=True, text=True).stdout.split('\0')
+          link = re.compile(r'\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
+          bad = []
+          for f in filter(None, files):
+              base = os.path.dirname(f)
+              for target in link.findall(open(f, encoding='utf-8').read()):
+                  if target.startswith(('http://','https://','mailto:','#')): continue
+                  path = target.split('#',1)[0]
+                  if not path: continue
+                  if not os.path.exists(os.path.normpath(os.path.join(base, path))):
+                      bad.append(f'{f}: -> {target}')
+          for b in bad: print(b)
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: the decisions log and its index agree
+        run: |
+          rc=0
+          for f in docs/decisions/[0-9]*.md; do
+            grep -q "($(basename "$f"))" docs/decisions/README.md || { echo "not indexed: $f"; rc=1; }
+          done
+          exit $rc

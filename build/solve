@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# solve -- the contrast solve, closed form.
+#
+#   build/solve                       the default profile, the assumed backdrop
+#   build/solve --profile noir        the other profile
+#   build/solve --backdrop 212        against a particular backdrop
+#   build/solve --opacity 0.55        what a fixed opacity would give instead
+#   build/solve --floor 4.5           override the text floor
+#   build/solve --sd 68.7             the backdrop's spatial variation
+#   build/solve --json                machine readable
+#
+# Needs nothing but bash, awk and palette.toml. No Noctalia, no Hyprland, no
+# desktop, no network -- which is what lets it run in CI and from a colours
+# hook with the same code.
+#
+# The arithmetic, once
+# --------------------
+# A translucent terminal composites as
+#
+#   seen_bg = own_bg x alpha + backdrop x (1 - alpha)
+#
+# and kitty fades only the background: glyphs stay fully opaque (verified in
+# kitty 0.48.2's own docs -- transparency applies only to cells whose background
+# is the default background). So the foreground byte is fixed and only the
+# background moves, which makes this a one-dimensional problem rather than a
+# search.
+#
+# Writing T for that composited background byte,
+#
+#   lift = seen_bg - own_bg = T - own_bg
+#
+# and THE BACKDROP CANCELS. Every constraint is a constraint on T alone:
+#
+#   LIFT_MIN = 12          ->  T >= own_bg + 12
+#   a role at floor R      ->  T <= maxT(role, R)
+#   STRUCTURE_MIN = 4      ->  sd x (1 - alpha) >= 4
+#
+# and the backdrop enters exactly once, at the end:
+#
+#   alpha = (backdrop - T) / (backdrop - own_bg)
+#
+# So the ramp is a function of T, T is a property of the palette, and the ramp
+# does not depend on the wallpaper at all. Only the opacity does. That is why
+# dist/ is exact rather than a worst-case approximation, and why the neovim
+# side has nothing to learn at runtime.
+#
+# Given a floor R, the minimum foreground luminance is
+#
+#   L_fg >= R x (L_bg + 0.05) - 0.05
+#
+# and inverting the sRGB transfer gives the byte directly:
+#
+#   c = 1.055 x L^(1/2.4) - 0.055        for L > 0.0031308
+#
+# No bisection. That matters for more than elegance: contrast is NOT monotonic
+# in the backdrop. #535353 measures 1.60:1 at a backdrop of 95, 1.15 at 143,
+# 1.02 at 160 -- where the composited background passes the text's own
+# luminance and the two swap places -- and 1.41 at 212. A solver that searched
+# would find the wrong side of that crossing.
+
+set -uo pipefail
+
+# Every number here is parsed by Lua, by kitty or by a JSON reader, all of which
+# require a '.' decimal separator. awk formats and compares numbers according to
+# the locale, so under a sv_SE session this would emit "0,90" and Hyprland would
+# refuse to load the generated config. The dots repo was bitten by exactly this
+# in bin/noct-glass; pin the locale here for the same reason.
+export LC_ALL=C
+
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+PALETTE=$REPO/palette.toml
+
+# The harness thresholds, from cachyos-hyprland-dots tests/checks/50-glass.sh.
+# Named here rather than inlined so the two repos can be compared by grep.
+LIFT_MIN=${LIFT_MIN:-12}
+STRUCTURE_MIN=${STRUCTURE_MIN:-4}
+
+usage() {
+    awk 'NR < 3 { next }
+         /^#[[:space:]]*$/ { if (seen) exit; next }
+         { sub(/^# ?/, ""); print; seen = 1 }' "$0"
+    exit 2
+}
+
+# ---------------------------------------------------------------------------
+# Reading palette.toml
+#
+# A strict subset -- "key = value" under simple [table] headers, which is nine
+# lines of awk and the same shape bin/noct-glass already parses in the dots
+# repo. CI validates the file with python3's tomllib, so the subset can never
+# drift away from real TOML without the build going red.
+# ---------------------------------------------------------------------------
+
+# toml_get <table> <key>
+#
+# The value is taken by splitting on the FIRST "=" rather than with -F=, and a
+# quoted value is read to its closing quote before any comment is stripped.
+# Both matter here: every colour in this file is a "#rrggbb" string, so a
+# naive sub(/#.*$/) trailing-comment strip removes the value itself. That was
+# the first bug this function had, and it failed quietly -- an empty own_bg
+# read as byte 0 and every lift came out 18 levels too high.
+toml_get() {
+    awk -v want="$1" -v k="$2" '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*\[/ { t = $0; gsub(/[][[:space:]]/, "", t); tbl = t; next }
+        tbl == want {
+            eq = index($0, "=")
+            if (!eq) next
+            key = substr($0, 1, eq - 1); gsub(/[[:space:]]/, "", key)
+            if (key != k) next
+            v = substr($0, eq + 1)
+            sub(/^[[:space:]]+/, "", v)
+            if (substr(v, 1, 1) == "\"") {
+                v = substr(v, 2)
+                q = index(v, "\"")
+                if (q) v = substr(v, 1, q - 1)
+            } else {
+                sub(/#.*$/, "", v)
+                sub(/[[:space:]]+$/, "", v)
+            }
+            print v; found = 1; exit
+        }
+        END { if (!found) exit 1 }
+    ' "$PALETTE"
+}
+
+# toml_keys <table> -- every key in a table, in file order.
+toml_keys() {
+    awk -F= -v want="$1" '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*\[/ { t = $0; gsub(/[][[:space:]]/, "", t); tbl = t; next }
+        tbl == want && /=/ { k = $1; gsub(/[[:space:]]/, "", k); if (k != "") print k }
+    ' "$PALETTE"
+}
+
+# ---------------------------------------------------------------------------
+# The maths. One awk program, used by everything below.
+# ---------------------------------------------------------------------------
+
+AWK_LIB='
+function lin(v,   c) { c = v / 255; return (c <= 0.03928) ? c / 12.92 : ((c + 0.055) / 1.055) ^ 2.4 }
+function unlin(L) {
+    if (L <= 0.0031308) return (L * 12.92) * 255
+    return (1.055 * (L ^ (1 / 2.4)) - 0.055) * 255
+}
+# relative luminance of an #rrggbb, WCAG 2.x
+function lum(hex,   r, g, b) {
+    r = hex2(substr(hex, 2, 2)); g = hex2(substr(hex, 4, 2)); b = hex2(substr(hex, 6, 2))
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+function hex2(s,   i, c, n, d) {
+    n = 0
+    for (i = 1; i <= length(s); i++) {
+        c = tolower(substr(s, i, 1))
+        d = index("0123456789abcdef", c) - 1
+        n = n * 16 + d
+    }
+    return n
+}
+function ratio(La, Lb) { return (La > Lb) ? (La + 0.05) / (Lb + 0.05) : (Lb + 0.05) / (La + 0.05) }
+# the dimmest grey BYTE that clears floor R over a background of luminance Lbg
+function minfg(Lbg, R,   L) { L = R * (Lbg + 0.05) - 0.05; if (L < 0) L = 0; return unlin(L) }
+# the brightest background BYTE at which a foreground of luminance Lfg clears R
+function maxbg(Lfg, R,   L) { L = (Lfg + 0.05) / R - 0.05; if (L < 0) L = 0; return unlin(L) }
+function ceilb(x) { return (x == int(x)) ? x : int(x) + 1 }
+function hexb(b,   n) { n = int(b + 0.5); if (n < 0) n = 0; if (n > 255) n = 255
+                        return sprintf("#%02x%02x%02x", n, n, n) }
+'
+
+# ---------------------------------------------------------------------------
+
+PROFILE=$(toml_get meta profile) || PROFILE=aa
+BACKDROP=""; OPACITY=""; FLOOR=""; SD=""; JSON=0
+
+while (( $# )); do
+    case $1 in
+        --profile)  PROFILE=$2; shift 2 ;;
+        --backdrop) BACKDROP=$2; shift 2 ;;
+        --opacity)  OPACITY=$2; shift 2 ;;
+        --floor)    FLOOR=$2; shift 2 ;;
+        --sd)       SD=$2; shift 2 ;;
+        --json)     JSON=1; shift ;;
+        -h|--help)  usage ;;
+        *)          printf 'solve: unknown argument %s\n' "$1" >&2; usage ;;
+    esac
+done
+
+T=$(toml_get "profile.$PROFILE" T) || { printf 'solve: no profile "%s" in palette.toml\n' "$PROFILE" >&2; exit 2; }
+F_TEXT=${FLOOR:-$(toml_get "profile.$PROFILE" text)}
+F_CHROME=$(toml_get "profile.$PROFILE" chrome)
+F_ACCENT=$(toml_get "profile.$PROFILE" accent)
+OWN=$(toml_get ramp bg)
+[[ -n $BACKDROP ]] || BACKDROP=$(toml_get backdrop assumed)
+
+# --opacity is the inverse question: not "what opacity reaches T" but "what T
+# does this opacity give me". Useful for describing what is shipped today.
+if [[ -n $OPACITY ]]; then
+    T=$(awk -v a="$OPACITY" -v b="$BACKDROP" -v own="$OWN" "$AWK_LIB"'
+        BEGIN { printf "%.1f", hex2(substr(own, 2, 2)) * a + b * (1 - a) }')
+fi
+
+read -r ALPHA LIFT STRUCTURE F45 F30 VERDICT REASON <<<"$(
+awk -v T="$T" -v b="$BACKDROP" -v own="$OWN" -v ft="$F_TEXT" -v fc="$F_CHROME" \
+    -v sd="${SD:-0}" -v lmin="$LIFT_MIN" -v smin="$STRUCTURE_MIN" "$AWK_LIB"'
+BEGIN {
+    ownb = hex2(substr(own, 2, 2))
+    lift = T - ownb
+    alpha = (b > ownb) ? (b - T) / (b - ownb) : 1
+    if (alpha < 0) alpha = 0
+    if (alpha > 1) alpha = 1
+    structure = (sd > 0) ? sd * (1 - alpha) : -1
+
+    Lt = lin(T)
+    f45 = ceilb(minfg(Lt, ft))
+    f30 = ceilb(minfg(Lt, fc))
+
+    verdict = "ok"; reason = "-"
+    if (lift < lmin) { verdict = "no-glass"; reason = sprintf("lift=%.1f<%s", lift, lmin) }
+    else if (structure >= 0 && structure < smin) {
+        verdict = "no-structure"
+        reason = sprintf("structure=%.1f<%s,needs-alpha<=%.2f", structure, smin, 1 - smin / sd)
+    }
+    printf "%.2f %.1f %.1f %d %d %s %s", alpha, lift, structure, f45, f30, verdict, reason
+}')"
+
+if (( JSON )); then
+    printf '{"profile":"%s","T":%s,"own_bg":"%s","backdrop":%s,"alpha":%s,' \
+           "$PROFILE" "$T" "$OWN" "$BACKDROP" "$ALPHA"
+    printf '"lift":%s,"structure":%s,"floor_text":%s,"floor_chrome":%s,' \
+           "$LIFT" "$STRUCTURE" "$F_TEXT" "$F_CHROME"
+    printf '"min_text":%s,"min_chrome":%s,"verdict":"%s","reason":"%s"}\n' \
+           "$F45" "$F30" "$VERDICT" "$REASON"
+    [[ $VERDICT == ok ]]
+    exit
+fi
+
+printf 'profile      %s   (%s)\n' "$PROFILE" "$(toml_get "profile.$PROFILE" claims)"
+printf 'T            %s   the composited background byte the ramp is solved against\n' "$T"
+printf 'own_bg       %s\n' "$OWN"
+printf 'backdrop     %s\n' "$BACKDROP"
+printf 'alpha        %s   terminal opacity that reaches T on this backdrop\n' "$ALPHA"
+printf 'lift         %s   (want >= %s)\n' "$LIFT" "$LIFT_MIN"
+if [[ $STRUCTURE != -1.0 ]]; then
+    printf 'structure    %s   (want >= %s, at sd %s)\n' "$STRUCTURE" "$STRUCTURE_MIN" "$SD"
+else
+    printf 'structure    unknown -- pass --sd to check it\n'
+fi
+printf 'floors       text %s:1 -> %s        chrome %s:1 -> %s        accent %s:1\n' \
+       "$F_TEXT" "$(printf '#%02x%02x%02x' "$F45" "$F45" "$F45")" \
+       "$F_CHROME" "$(printf '#%02x%02x%02x' "$F30" "$F30" "$F30")" "$F_ACCENT"
+printf 'verdict      %s' "$VERDICT"
+[[ $REASON == - ]] || printf '   %s' "$REASON"
+printf '\n'
+
+[[ $VERDICT == ok ]]
