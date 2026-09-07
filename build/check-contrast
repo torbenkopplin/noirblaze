@@ -68,17 +68,23 @@ while (( $# )); do
 done
 
 FT=""; FC=""; FA=""; RAMP=""
+FS=""; BASE=""
 load_profile() {
     FT=$(toml_get "profile.$1" text); FC=$(toml_get "profile.$1" chrome)
-    FA=$(toml_get "profile.$1" accent)
+    FA=$(toml_get "profile.$1" accent); FS=$(toml_get "profile.$1" surface)
     RAMP=$({ toml_section ramp; toml_section ramp_extra; })
+    BASE=$(toml_get ramp bg)
 }
 # solved_on <surface #rrggbb>
-solved_on() { printf '%s\n' "$RAMP" | solve_surface "$1" "$FT" "$FC" "$FA"; }
-# surface_hex <role|default> <T>
+solved_on() { printf '%s\n' "$RAMP" | solve_surface "$1" "$FT" "$FC" "$FA" "$FS" "$BASE"; }
+
+# surface_hex <role|default> <T> -- the colour a group's text actually sits on.
+# The SOLVED background, not the static one: bg2 is lifted to keep CursorLine
+# visible against T, and text on it has to clear its floor against where bg2
+# ended up.
 surface_hex() {
     [[ $1 == default ]] && { awk -v b="$2" "$AWK_LIB"'BEGIN { print hexb(b) }'; return; }
-    printf '%s\n' "$RAMP" | awk -F'\t' -v r="$1" '$1==r{print $2;exit}'
+    bg_hex "$1"
 }
 # solved <profile> -- the default surface only.
 #
@@ -131,6 +137,7 @@ run_profile() {
             # so the check has to look the background up the same way emit did.
             fghex=$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$mark" '$1==r && $2=="fixed"{print $3;exit}')
             bghex=$(solved_on "$fghex" | awk -F'\t' -v r="$bg" '$1==r && $2=="text"{print $3;exit}')
+            :
         else
             fghex=$(solved_on "$bghex" | awk -F'\t' -v r="$mark" -v c="$cls" '$1==r && $2==c{print $3;exit}')
         fi
@@ -168,6 +175,54 @@ run_profile() {
     n=$(printf '%s\n' "$out" | sed -n 's/^#N //p')
     while IFS= read -r l; do [[ -n $l && $l != \#N* ]] && problems+=("$l"); done <<<"$out"
     verdict ceilings "$n roles stayed under their ceiling" "${problems[@]}"
+
+    # --- surfaces ----------------------------------------------------------
+    #
+    # The check that would have caught the regression this class exists for.
+    #
+    # A background is opaque -- kitty fades only cells matching the default
+    # background -- so bg2 and bg3 do not move when the thing under them does.
+    # At T = 36 that left CursorLine (#212121, byte 33) three levels DARKER than
+    # the buffer: a 1.04:1 step that had crossed over and vanished. Nothing
+    # noticed, because a background-only group has no foreground to check.
+    #
+    # Two assertions, and both are needed. Separation from the BUFFER is what
+    # makes a layer visible at all; separation from the LAYER BELOW is what
+    # keeps them distinct from each other -- lift bg2 to clear the buffer and
+    # leave bg3 alone, and CursorLine lands two bytes from Visual, so selecting
+    # text on the current line stops being visible.
+    problems=()
+    local Thex layer prev prev_name declared got
+    Thex=$(awk -v b="$T" "$AWK_LIB"'BEGIN { print hexb(b) }')
+    prev=$Thex; prev_name="the buffer"; n=0
+    for layer in bg2 bg3 dim1; do
+        declared=$(awk -v a="$(printf '%s\n' "$RAMP" | awk -F'\t' -v r="$layer" '$1==r{print $2;exit}')" \
+                       -v b="$BASE" "$AWK_LIB"'BEGIN { printf "%.3f", ratio(lum(a), lum(b)) }')
+        got=$(surface_hex "$layer" "$T")
+        n=$((n + 1))
+        local r_buf r_prev
+        r_buf=$(awk -v a="$got" -v b="$Thex" "$AWK_LIB"'BEGIN { printf "%.2f", ratio(lum(a), lum(b)) }')
+        r_prev=$(awk -v a="$got" -v b="$prev" "$AWK_LIB"'BEGIN { printf "%.2f", ratio(lum(a), lum(b)) }')
+        if awk -v r="$r_buf" -v d="$declared" 'BEGIN { exit !(r < d - 0.01) }'; then
+            # Short of its declared separation is only a defect if nothing was
+            # stopping it. A surface is capped by the dimmest FIXED foreground
+            # pinned to it -- the accent cannot follow a lift, so bg3 stops
+            # where pink would fall under its floor. That is a stated trade
+            # between two floors, not a failure, and the number is printed so it
+            # can be argued with.
+            local cap; cap=$(surface_cap "$layer" || true)
+            if [[ -n $cap && $cap == "$got" ]]; then
+                info "$layer is ${r_buf}:1 from the buffer against a declared ${declared}:1 --"
+                info "  capped at $cap, where a fixed foreground on it reaches its own floor"
+            else
+                problems+=("$layer $got is ${r_buf}:1 from the buffer, and the palette declares ${declared}:1")
+            fi
+        fi
+        awk -v r="$r_prev" 'BEGIN { exit !(r < 1.05) }' &&
+            problems+=("$layer $got is only ${r_prev}:1 from $prev_name -- the two layers have merged")
+        prev=$got; prev_name=$layer
+    done
+    verdict surfaces "$n layers keep their declared separation, and each other" "${problems[@]}"
 
     # --- the greens --------------------------------------------------------
     #

@@ -85,11 +85,15 @@ mkdir -p "$OUT/colors" "$OUT/dist"
 FT=$(toml_get "profile.$PROFILE" text)
 FC=$(toml_get "profile.$PROFILE" chrome)
 FA=$(toml_get "profile.$PROFILE" accent)
+FS=$(toml_get "profile.$PROFILE" surface)
+# The theme's own background, which every surface's separation is measured
+# from. Not the composited one: a layer stack is a property of the palette.
+BASE=$(toml_get ramp bg)
 
 RAMP=$({ toml_section ramp; toml_section ramp_extra; })
 
 # solved_on <surface byte> -- role<TAB>class<TAB>hex for that surface.
-solved_on() { printf '%s\n' "$RAMP" | solve_surface "$1" "$FT" "$FC" "$FA"; }
+solved_on() { printf '%s\n' "$RAMP" | solve_surface "$1" "$FT" "$FC" "$FA" "$FS" "$BASE"; }
 
 # SOLVED is the default surface, T. Everything that has no explicit background
 # uses it, which is almost everything.
@@ -97,59 +101,13 @@ SOLVED=$(solved_on "$(awk -v b="$T" "$AWK_LIB"'BEGIN { print hexb(b) }')")
 
 # surface_hex <role|default> -- the colour a group's text sits on. "default" is
 # the composited background, which is the theme's own bg seen at T.
+#
+# This returns the SOLVED background, not the static one. It has to: bg2 is
+# lifted to keep CursorLine visible against T, and text on bg2 then has to clear
+# its floor against where bg2 actually ended up rather than where it started.
 surface_hex() {
     [[ $1 == default ]] && { awk -v b="$T" "$AWK_LIB"'BEGIN { print hexb(b) }'; return; }
-    printf '%s\n' "$RAMP" | awk -F'\t' -v r="$1" '$1==r{print $2;exit}'
-}
-
-# hex <role> <class> [surface] -- the solved colour.
-#
-# An inverse row is looked up in the `text` class -- a highlighted match or a
-# ":more" prompt is text and takes the text floor; what makes it inverse is only
-# which of the two roles moves.
-hex() {
-    local tbl cls=$2
-    [[ $cls == inverse ]] && cls=text
-    if [[ ${3:-default} == default ]]; then tbl=$SOLVED
-    else tbl=$(solved_on "$(surface_hex "$3")"); fi
-    printf '%s\n' "$tbl" | awk -F'\t' -v r="$1" -v c="$cls" '$1==r && $2==c {print $3; exit}'
-}
-
-# pairs_used -- "class<TAB>surface<TAB>role" for every combination groups.tsv
-# needs.
-#
-# An `inverse` row is the same machinery with the two roles swapped. Its
-# foreground is already the darkest colour in the theme, so contrast is bought
-# by lifting the BACKGROUND -- and "lift this role until it clears R against
-# that colour" is exactly what solve_surface does. So the surface for an inverse
-# row is its FOREGROUND, and the role being solved is its background.
-#
-# MoreMsg is the one that needs it: #121212 on dim3 is 4.24:1, and the fix is
-# dim3 -> #7c7c7c, four bytes.
-pairs_used() {
-    awk -F'\t' -v bgrole="$(default_bg_roles)" '
-        /^#/ || NF < 6 { next }
-        {
-            cls = $5
-            if (cls == "fixed") next
-            if (cls == "inverse") {
-                if ($2 != "-" && $3 != "-" && $3 != "none") print "inverse\t" $2 "\t" $3
-                next
-            }
-            surf = ($3 == "-" || $3 == "none" || $3 == bgrole) ? "default" : $3
-            if ($2 != "-") print cls "\t" surf "\t" $2
-            if ($4 != "-") print cls "\t" surf "\t" $4
-        }' "$GROUPS_TSV" | sort -u
-}
-
-# default_bg_roles -- the role name whose colour IS the default background.
-# Any group painted in it composites; see surface_of in build/lib-toml.sh.
-default_bg_roles() { printf 'bg'; }
-
-# tbl_name <class> <surface>
-tbl_name() {
-    case $1 in text) n=t ;; chrome) n=k ;; accent) n=a ;; inverse) n=b ;; *) n=c ;; esac
-    [[ $2 == default ]] && printf '%s' "$n" || printf '%s_%s' "$n" "$2"
+    bg_hex "$1"
 }
 
 # roles_fixed -- every role referenced as a background, or by a fixed/inverse
@@ -214,7 +172,7 @@ LUA
     # `c` first: the raw palette.
     printf 'P.c = {\n'
     roles_fixed | while read -r role; do
-        printf '  %-14s = "%s",\n' "$role" "$(hex "$role" fixed)"
+        printf '  %-14s = "%s",\n' "$role" "$(bg_hex "$role")"
     done
     printf '}\n'
     # then one table per (class, surface) pair in use.

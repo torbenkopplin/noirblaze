@@ -39,11 +39,11 @@ local hi = function(group, opts) vim.api.nvim_set_hl(0, group, opts) end
 local P = {}
 P.c = {
   bg             = "#121212",
-  bg2            = "#212121",
-  bg3            = "#323232",
-  dim1           = "#535353",
-  dim2           = "#737373",
-  dim3           = "#787878",
+  bg2            = "#303030",
+  bg3            = "#3a3a3a",
+  dim1           = "#606060",
+  dim2           = "#818181",
+  dim3           = "#868686",
   pink           = "#ff0088",
   white          = "#ffffff",
 }
@@ -76,18 +76,18 @@ P.b_bg = {
   white          = "#ffffff",
 }
 P.t_bg2 = {
-  dim2           = "#888888",
-  dim4           = "#888888",
-  mid            = "#949494",
+  dim2           = "#979797",
+  dim4           = "#979797",
+  mid            = "#979797",
 }
 P.t_bg3 = {
-  dim1           = "#999999",
-  dim2           = "#999999",
-  dim3           = "#999999",
+  dim1           = "#a3a3a3",
+  dim2           = "#a3a3a3",
+  dim3           = "#a3a3a3",
   fg0            = "#f5f5f5",
   fg1            = "#d5d5d5",
   fg2            = "#b4b4b4",
-  mid            = "#999999",
+  mid            = "#a3a3a3",
   white          = "#ffffff",
 }
 P.t = {

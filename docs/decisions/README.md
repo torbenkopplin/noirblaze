@@ -19,6 +19,7 @@ load-bearing half.
 | 003 | [Ramp, then opacity, then the blur; then refuse](003-the-knob-order.md) | 2026-09-05 |
 | 004 | [`dist/` assumes one number, and it is not a colour](004-what-dist-assumes.md) | 2026-09-05 |
 | 005 | [The accent keeps `#ff0088`, at a stated 3:1](005-the-accent-keeps-its-colour.md) | 2026-09-05 |
+| 006 | [A background is solved too, and it is capped by what sits on it](006-a-surface-is-solved-too.md) | 2026-09-07 |
 
 ## Settled against, in one place
 
@@ -31,6 +32,8 @@ load-bearing half.
 | Estimating the backdrop from a whole-image mean | A window samples the wallpaper behind itself. Measured, the brightest window-sized tile runs ~50 levels above the image mean — median 153 against 101 | [004](004-what-dist-assumes.md) |
 | Lifting the accent to 4.5:1 | It needs T ≤ 29, which caps lift at 11 against a `LIFT_MIN` of 12. With the hue held it becomes `#ff4fad`, a pastel | [005](005-the-accent-keeps-its-colour.md) |
 | Substituting the accent above a backdrop threshold | The theme's identity colour would change with the wallpaper | [005](005-the-accent-keeps-its-colour.md) |
+| One global floor for every surface | Only `bg2` had actually inverted, but lifting it alone puts `CursorLine` two bytes from `Visual`, so a selection on the current line disappears. A layer stack moves as a stack | [006](006-a-surface-is-solved-too.md) |
+| Solving a surface by luminance like everything else | `bg2` at byte 33 under a composited background of 36 takes the dark-on-light branch and comes out `#161616` — visible, and the layer order inverted | [006](006-a-surface-is-solved-too.md) |
 | Deriving the ANSI greens from the editor greys | It produces a grey-green and breaks `git diff` and `ls`. Asserted against, not merely avoided | [005](005-the-accent-keeps-its-colour.md) |
 
 ## Adding one

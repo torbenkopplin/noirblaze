@@ -133,6 +133,23 @@ stop being dimmer than strings — that distinction is not recoverable, because
 `Keyword` stays distinct from the dim band, which it would not at a heavier
 glass setting.
 
+**Backgrounds move too, and for a different reason.** kitty makes a cell
+translucent only when its background matches the default background, so a panel
+is painted opaque and does not follow the buffer up. `CursorLine` ended up
+**1.04:1** against the composited background — three levels darker, crossed over
+and invisible. Each surface is now lifted to keep the separation the palette
+declares for it, capped by the dimmest fixed colour drawn on it:
+
+| layer | before | after | vs the buffer |
+|---|---|---|---|
+| `bg2` `CursorLine` | `#212121` | `#303030` | 1.04 → **1.18** |
+| `bg3` `Visual`, `Pmenu` | `#323232` | `#3a3a3a` | 1.21 → **1.36** |
+| `dim1` `PmenuSel`, `DiffText` | `#535353` | `#606060` | 2.02 → **2.47** |
+
+`bg3` stops short of its declared 1.461:1 because pink is fixed and would fall
+under 3:1 on anything lighter — see
+[006](docs/decisions/006-a-surface-is-solved-too.md).
+
 **The terminal block barely moves.** Three slots change for contrast —
 `bright.black` (the fish prompt, `git diff` context, `ls`, `fzf`, `bat`,
 `delta`), `normal.cyan` and `normal.magenta`. The rest already cleared their
@@ -186,7 +203,7 @@ same every time.**
 | `groups.tsv` | highlight group → role, class and background. No colours |
 | `build/solve` | the closed-form solve. bash + awk, no desktop |
 | `build/emit` | palette → every artefact. `--check` diffs the committed output |
-| `build/check-contrast` | every group against its own floor on its own background |
+| `build/check-contrast` | every group against its own floor on its own background, and every layer against the one below |
 | `colors/noirblaze.lua` | generated, committed, loadable by `vim.pack` |
 | `dist/` | generated, committed: Noctalia palette, kitty colours, glass sample |
 | `docs/design.md` | how the numbers were arrived at |

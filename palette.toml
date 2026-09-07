@@ -98,6 +98,28 @@ floor = 3.0
 [class.fixed]
 floor = 0.0
 
+# The one class that is not about text at all.
+#
+# A background is opaque -- kitty fades only cells matching the DEFAULT
+# background -- so bg2 and bg3 do not move when the thing they sit on does. At
+# T = 36 that leaves CursorLine (#212121, byte 33) THREE LEVELS DARKER than the
+# buffer around it: a 1.04:1 step that has crossed over and vanished. It was
+# 2.13:1 when the composited background was 84, so this is a regression the
+# adaptive opacity introduced and not an old defect.
+#
+# The floor is the theme's own smallest declared step -- bg2 sits 1.163:1 above
+# bg in the static palette -- rather than a number invented for the occasion. A
+# surface may therefore never be less distinct from what it sits on than the
+# palette already says it should be.
+#
+# bg3 is at 1.21:1 against T and clears this untouched, which is the point of
+# deriving the floor rather than picking one: only the role that actually broke
+# moves. Requiring bg3's own 1.461 instead would lift it to #3e3e3e and push the
+# text on it to #acacac, past dim1's ceiling -- a cascade, to fix something that
+# is not broken.
+[class.surface]
+floor = 1.163
+
 # ---------------------------------------------------------------------------
 # Ceilings
 #
@@ -154,6 +176,7 @@ claims     = "WCAG 2.2 AA: 4.5:1 for text, 3:1 for non-text"
 text       = 4.5
 chrome     = 3.0
 accent     = 3.0
+surface    = 1.163
 # lift = T - 18 = 18, against the harness's LIFT_MIN of 12 and the 17 that
 # decision 011 in the dots repo measured and shipped. Chosen over T = 46 because
 # a measured backdrop sd of 68.7 (not the 20 that decision was taken on) makes
@@ -167,6 +190,10 @@ claims     = "none -- states its own ratios and does not claim AA"
 text       = 3.0
 chrome     = 1.8
 accent     = 3.0
+# Not relaxed. A surface that has inverted is not a dimmer aesthetic, it is a
+# cursor line you cannot see, and `noir` is a different taste in contrast rather
+# than a licence to ship something invisible.
+surface    = 1.163
 # Same T as `aa`, deliberately: the two profiles differ in what they CLAIM, not
 # in how much glass you get. Both are solved against the same composited
 # background, so their ratios are directly comparable and switching profile
