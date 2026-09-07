@@ -56,6 +56,13 @@ jobs:
       - name: contrast, both profiles
         run: build/check-contrast --all
 
+      # jq is what dist-agree compares the two artefacts with; without it that
+      # check skips and the drift it exists to catch goes unnoticed in CI.
+      - name: jq is present, so dist-agree actually runs
+        run: |
+          command -v jq
+          build/check-contrast | grep -q 'PASS  dist-agree'>/dev/null
+
       - name: the solver refuses when it should
         run: |
           # A backdrop no wallpaper reaches, at a floor nothing can meet: the

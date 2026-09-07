@@ -309,6 +309,51 @@ check_upstream() {
     verdict upstream "${#UP[@]} terminal values still match upstream verbatim" "${problems[@]}"
 }
 
+# The two dist/ artefacts describe the same terminal in two formats, and they
+# are rendered by two different blocks of build/emit. Nothing made them agree
+# until this check existed, and they did not: the palette carried upstream's
+# light selection (#b0b0b0 on #121212) while the kitty file had a dark one
+# (#d5d5d5 on #323232), so a standalone kitty and a Noctalia one disagreed about
+# what a selection looks like.
+check_dist_agree() {
+    local -a problems=()
+    local n=0 key jq_path conf_key a b
+    command -v jq >/dev/null 2>&1 || { info "jq not installed -- skipping dist-agree"; return; }
+
+    kitty_val() { sed -n "s/^$1[[:space:]]\{1,\}\(#[0-9A-Fa-f]\{6\}\).*/\1/p" "$REPO/dist/kitty-colors.conf" | head -1; }
+
+    while read -r conf_key jq_path; do
+        a=$(kitty_val "$conf_key")
+        b=$(jq -r ".dark.terminal.$jq_path" "$REPO/dist/noirblaze.json")
+        n=$((n + 1))
+        [[ ${a,,} == "${b,,}" ]] || problems+=("$conf_key: kitty-colors.conf has $a, noirblaze.json has $b")
+    done <<'PAIRS'
+foreground foreground
+background background
+cursor cursor
+cursor_text_color cursorText
+selection_foreground selectionFg
+selection_background selectionBg
+color0 normal.black
+color1 normal.red
+color2 normal.green
+color3 normal.yellow
+color4 normal.blue
+color5 normal.magenta
+color6 normal.cyan
+color7 normal.white
+color8 bright.black
+color9 bright.red
+color10 bright.green
+color11 bright.yellow
+color12 bright.blue
+color13 bright.magenta
+color14 bright.cyan
+color15 bright.white
+PAIRS
+    verdict dist-agree "$n values are the same in both dist/ artefacts" "${problems[@]}"
+}
+
 check_emit() {
     if "$REPO/build/emit" --check >/dev/null 2>&1; then
         pass emit "the committed output matches palette.toml"
@@ -385,6 +430,7 @@ else
 fi
 printf '\n'
 check_upstream
+check_dist_agree
 check_emit
 printf '\n%s%d passed, %d failed%s\n' "$BOLD" "$PASS" "$FAIL" "$RESET"
 (( FAIL == 0 ))
