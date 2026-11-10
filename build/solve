@@ -214,8 +214,16 @@ BEGIN {
     f45 = ceilb(minfg(Lt, ft))
     f30 = ceilb(minfg(Lt, fc))
 
+    # A floor no grey can meet on T comes out of minfg as a byte above 255.
+    # It used to be printed as "#125125125" with an exit of 0; it has to be
+    # refused, and before anything else, because no opacity can fix it.
     verdict = "ok"; reason = "-"
-    if (lift < lmin) { verdict = "no-glass"; reason = sprintf("lift=%.1f<%s", lift, lmin) }
+    if (f45 > 255 || f30 > 255) {
+        verdict = "unreachable"
+        reason = (f45 > 255) ? sprintf("text-%s:1-needs-byte-%d>255", ft, f45) \
+                             : sprintf("chrome-%s:1-needs-byte-%d>255", fc, f30)
+    }
+    else if (lift < lmin) { verdict = "no-glass"; reason = sprintf("lift=%.1f<%s", lift, lmin) }
     else if (structure >= 0 && structure < smin) {
         verdict = "no-structure"
         reason = sprintf("structure=%.1f<%s,needs-alpha<=%.2f", structure, smin, 1 - smin / sd)
@@ -245,9 +253,10 @@ if [[ $STRUCTURE != -1.0 ]]; then
 else
     printf 'structure    unknown -- pass --sd to check it\n'
 fi
+# grey <byte> -- #rrggbb, or "unreachable" for a byte past white.
+grey() { if (( $1 > 255 )); then printf 'unreachable'; else printf '#%02x%02x%02x' "$1" "$1" "$1"; fi; }
 printf 'floors       text %s:1 -> %s        chrome %s:1 -> %s        accent %s:1\n' \
-       "$F_TEXT" "$(printf '#%02x%02x%02x' "$F45" "$F45" "$F45")" \
-       "$F_CHROME" "$(printf '#%02x%02x%02x' "$F30" "$F30" "$F30")" "$F_ACCENT"
+       "$F_TEXT" "$(grey "$F45")" "$F_CHROME" "$(grey "$F30")" "$F_ACCENT"
 printf 'verdict      %s' "$VERDICT"
 [[ $REASON == - ]] || printf '   %s' "$REASON"
 printf '\n'
