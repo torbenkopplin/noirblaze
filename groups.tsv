@@ -93,10 +93,19 @@ Pmenu	fg1	bg3	-	text	-
 PmenuSel	white	dim1	-	text	bold
 PmenuSbar	-	bg3	-	fixed	-
 PmenuThumb	-	dim2	-	fixed	-
-DiffAdd	pink	bg3	-	accent	-
-DiffChange	white	bg3	-	text	-
+# The diff groups carry no foreground, like Visual: in diff mode a foreground
+# here replaces the syntax colour, so every added line came out solid pink and
+# every changed one solid white. A background alone lets the code keep its
+# colours. DiffChange takes the CursorLine shade and DiffText the panel shade,
+# so the changed span stands out from its line the way a selection stands out
+# from the current line; on dim1 the dim band would sit at 1.85:1. DiffDelete
+# keeps its pink: it only paints the filler on the side that has no text.
+# build/check-contrast "show-through" measures the syntax colours on these.
+# See docs/decisions/007.
+DiffAdd	-	bg3	-	fixed	-
+DiffChange	-	bg2	-	fixed	-
 DiffDelete	pink	bg3	-	accent	-
-DiffText	white	dim1	-	text	-
+DiffText	-	bg3	-	fixed	-
 DiagnosticError	pink	-	-	accent	-
 DiagnosticWarn	mid	-	-	text	-
 DiagnosticInfo	dim4	-	-	text	-

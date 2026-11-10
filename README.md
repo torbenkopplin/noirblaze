@@ -144,7 +144,7 @@ declares for it, capped by the dimmest fixed colour drawn on it:
 |---|---|---|---|
 | `bg2` `CursorLine` | `#212121` | `#303030` | 1.04 → **1.18** |
 | `bg3` `Visual`, `Pmenu` | `#323232` | `#3a3a3a` | 1.21 → **1.36** |
-| `dim1` `PmenuSel`, `DiffText` | `#535353` | `#606060` | 2.02 → **2.47** |
+| `dim1` `PmenuSel` | `#535353` | `#606060` | 2.02 → **2.47** |
 
 `bg3` stops short of its declared 1.461:1 because pink is fixed and would fall
 under 3:1 on anything lighter — see

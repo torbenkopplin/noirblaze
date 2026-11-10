@@ -88,7 +88,6 @@ P.t_bg3 = {
   fg1            = "#d5d5d5",
   fg2            = "#b4b4b4",
   mid            = "#a3a3a3",
-  white          = "#ffffff",
 }
 P.t = {
   dim1           = "#8b8b8b",
@@ -202,10 +201,10 @@ hi("Pmenu", { fg = t_bg3.fg1, bg = c.bg3 })
 hi("PmenuSel", { fg = t_dim1.white, bg = c.dim1, bold = true })
 hi("PmenuSbar", { bg = c.bg3 })
 hi("PmenuThumb", { bg = c.dim2 })
-hi("DiffAdd", { fg = a_bg3.pink, bg = c.bg3 })
-hi("DiffChange", { fg = t_bg3.white, bg = c.bg3 })
+hi("DiffAdd", { bg = c.bg3 })
+hi("DiffChange", { bg = c.bg2 })
 hi("DiffDelete", { fg = a_bg3.pink, bg = c.bg3 })
-hi("DiffText", { fg = t_dim1.white, bg = c.dim1 })
+hi("DiffText", { bg = c.bg3 })
 hi("DiagnosticError", { fg = a.pink })
 hi("DiagnosticWarn", { fg = t.mid })
 hi("DiagnosticInfo", { fg = t.dim4 })

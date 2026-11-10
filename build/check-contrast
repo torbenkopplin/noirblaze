@@ -17,6 +17,7 @@
 #   ceilings      no role was lifted past what palette.toml allows
 #   green         `green` and `green_bright` came through untouched
 #   hierarchy     no role ended up brighter than a role above it
+#   show-through  the code under CursorLine, Visual and the diff stays visible
 #   ansi          the 21 slots that are upstream's still are
 #   emit          the committed output matches palette.toml
 #
@@ -223,6 +224,53 @@ run_profile() {
         prev=$got; prev_name=$layer
     done
     verdict surfaces "$n layers keep their declared separation, and each other" "${problems[@]}"
+
+    # --- show-through ------------------------------------------------------
+    #
+    # Some backgrounds are drawn UNDER the buffer's own text: the current line,
+    # a selection, the diff. They carry no foreground, so floors skips them, but
+    # the code on them is still read -- in its syntax colours, which were solved
+    # against T and not against the lighter surface. Nothing measured that until
+    # the diff groups dropped their foreground (decision 007).
+    #
+    # A surface is lighter than T by construction, and every text role is solved
+    # to clear its floor exactly at T, so the dimmest syntax colour cannot keep
+    # the text floor on any of them. That shortfall is printed, not failed, the
+    # same way surfaces prints the bg3 cap. What fails is code that stops being
+    # visible at all -- under the non-text floor -- and the accent under its own.
+    problems=()
+    local dim_role dim_hex acc_hex g gbg gsurf ghex r_txt r_acc
+    local -A on_surface=()
+    read -r dim_role dim_hex < <(
+        awk -F'\t' '!/^#/ && $5=="text" && ($3=="-"||$3=="none") && $2!="-" {print $2}' "$GROUPS_TSV" | sort -u |
+        while read -r g; do
+            printf '%s\t%s\n' "$g" "$(printf '%s\n' "$SOLVED" | awk -F'\t' -v r="$g" '$1==r&&$2=="text"{print $3;exit}')"
+        done |
+        awk -F'\t' "$AWK_LIB"'{ l = lum($2); if (!n++ || l < min) { min = l; r = $1; h = $2 } } END { print r, h }')
+    acc_hex=$(printf '%s\n' "$SOLVED" | awk -F'\t' '$1=="pink"&&$2=="accent"{print $3;exit}')
+    [[ -n $dim_hex && -n $acc_hex ]] || { fail show-through "could not find the syntax colours"; return 1; }
+    # The groups the editor draws under buffer text, by name: groups.tsv has no
+    # column that says so. MatchParen is one too and is left out on purpose --
+    # it sits on dim1 under a single bracket, not under code that is read.
+    for g in CursorLine Visual DiffAdd DiffChange DiffText; do
+        gbg=$(awk -F'\t' -v g="$g" '$1==g{print $3;exit}' "$GROUPS_TSV")
+        [[ -n $gbg && $gbg != - ]] || { problems+=("$g has no background in groups.tsv"); continue; }
+        on_surface[$gbg]+="${on_surface[$gbg]:+, }$g"
+    done
+    n=0
+    for gsurf in "${!on_surface[@]}"; do
+        ghex=$(surface_hex "$gsurf" "$T")
+        r_txt=$(cr "$dim_hex" "$ghex"); r_acc=$(cr "$acc_hex" "$ghex")
+        n=$((n + 1))
+        if awk -v r="$r_txt" -v f="$FC" 'BEGIN { exit !(r < f - 0.005) }'; then
+            problems+=("$dim_role $dim_hex on $gsurf $ghex (${on_surface[$gsurf]}) = ${r_txt}:1, under the non-text floor $FC")
+        elif awk -v r="$r_txt" -v f="$FT" 'BEGIN { exit !(r < f - 0.005) }'; then
+            info "$dim_role $dim_hex is ${r_txt}:1 on $gsurf $ghex (${on_surface[$gsurf]}) against a text floor of $FT"
+        fi
+        awk -v r="$r_acc" -v f="$FA" 'BEGIN { exit !(r < f - 0.005) }' &&
+            problems+=("pink $acc_hex on $gsurf $ghex (${on_surface[$gsurf]}) = ${r_acc}:1, floor $FA")
+    done
+    verdict show-through "$n surfaces under the buffer keep its code visible" "${problems[@]}"
 
     # --- the greens --------------------------------------------------------
     #

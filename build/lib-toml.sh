@@ -186,7 +186,7 @@ surfaces() {
 # the accent is #ff0088 by decision and a grey ramp cannot lift a hue. Measured:
 # bg3 solved to its declared 1.461:1 lands at #3f3f3f, where pink is 2.81:1 --
 # under the 3:1 the accent exception is stated at -- and Error, Todo, VisualNOS,
-# DiffAdd and DiffDelete all put pink on bg3.
+# and DiffDelete all put pink on bg3.
 #
 # So a surface rises no further than the dimmest thing pinned to it allows. The
 # cap is derived from groups.tsv and the palette, not chosen: no number here.
